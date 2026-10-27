@@ -1,28 +1,704 @@
+
 ---
 const steps = [
-  ['01', 'Review queue', 'Show only the submissions allocated to the authenticated reviewer.'],
-  ['02', 'Rubric', 'Capture criterion scores and evidence without exposing sensitive allocation rules.'],
-  ['03', 'Moderation', 'Route flags to a tenant-scoped moderator before grades are passed back.'],
+  {
+    number: '01',
+    title: 'Review queue',
+    description: 'View submissions assigned to you and track the work that needs your attention.',
+    tag: 'Reviewer workspace',
+  },
+  {
+    number: '02',
+    title: 'Rubric',
+    description: 'Assess submissions against clear criteria and record scores with supporting evidence.',
+    tag: 'Assessment',
+  },
+  {
+    number: '03',
+    title: 'Moderation',
+    description: 'Identify concerns and route flagged reviews for moderation before grades are returned.',
+    tag: 'Quality assurance',
+  },
+];
+
+const demoReviews = [
+  {
+    id: 'DEMO-001',
+    title: 'Project proposal',
+    course: 'Peer assessment',
+    status: 'Ready for review',
+  },
+  {
+    id: 'DEMO-002',
+    title: 'Research outline',
+    course: 'Peer assessment',
+    status: 'In progress',
+  },
+  {
+    id: 'DEMO-003',
+    title: 'Literature review',
+    course: 'Peer assessment',
+    status: 'Awaiting allocation',
+  },
 ];
 ---
+
 <html lang="en">
-  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width" /><title>IQTerra Peer Review</title></head>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="IQTerra peer review workspace for reviewing submissions, applying rubrics and supporting moderation."
+    />
+    <title>Reviewer Workspace | IQTerra</title>
+  </head>
+
   <body>
-    <main>
-      <p class="eyebrow">IQT-02 · LTI peer review service</p>
-      <h1>Peer review that stays inside IQTerra.</h1>
-      <p class="lede">This Astro shell is ready for the reviewer workflow. Moodle launches the service; allocation, rubric and moderation remain on this side of the boundary.</p>
-      <section class="grid">
-        {steps.map(([number, title, text]) => <article><span>{number}</span><h2>{title}</h2><p>{text}</p></article>)}
+    <header class="topbar">
+      <a class="brand" href="#home" aria-label="IQTerra reviewer workspace home">
+        <span class="brand-mark">IQ</span>
+        <span>
+          <strong>IQTerra</strong>
+          <small>PEER REVIEW</small>
+        </span>
+      </a>
+
+      <nav aria-label="Main navigation">
+        <a href="#home" class="nav-link active">Workspace</a>
+        <a href="#workflow" class="nav-link">Workflow</a>
+        <a href="#queue" class="nav-link">Review queue</a>
+      </nav>
+
+      <span class="environment">
+        <span class="status-dot"></span>
+        Prototype
+      </span>
+    </header>
+
+    <main id="home">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">IQT-02 / REVIEWER WORKSPACE</p>
+          <h1>Review with clarity.<br /><span>Assess with confidence.</span></h1>
+          <p class="lede">
+            A focused workspace for reviewing allocated submissions,
+            recording rubric-based feedback and supporting fair moderation.
+          </p>
+
+          <div class="hero-actions">
+            <a class="button primary" href="#queue">Explore review queue <span aria-hidden="true">→</span></a>
+            <a class="button secondary" href="#workflow">Explore workflow</a>
+          </div>
+        </div>
+
+        <aside class="hero-panel">
+          <div class="panel-icon" aria-hidden="true">✳</div>
+          <p class="panel-label">THE REVIEW PROCESS</p>
+          <h2>Fair, structured peer assessment.</h2>
+          <p>
+            Keep assessment criteria clear, feedback constructive and
+            moderation within the appropriate workflow.
+          </p>
+          <div class="panel-footer">
+            <span class="status-dot"></span>
+            Reviewer interface preview
+          </div>
+        </aside>
       </section>
-      <p class="status">Prototype status: allocation API available at <code>/api/allocations/preview</code>.</p>
+
+      <section id="workflow" class="section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">YOUR WORKFLOW</p>
+            <h2>Everything has a place.</h2>
+          </div>
+          <p class="section-note">
+            Three connected stages for a structured review process.
+          </p>
+        </div>
+
+        <div class="workflow-grid">
+          {steps.map((step) => (
+            <article class="workflow-card">
+              <div class="card-top">
+                <span class="step-number">{step.number}</span>
+                <span class="card-arrow" aria-hidden="true">↗</span>
+              </div>
+              <span class="card-tag">{step.tag}</span>
+              <h3>{step.title}</h3>
+              <p>{step.description}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section id="queue" class="section queue-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">REVIEW ACTIVITY</p>
+            <h2>Review queue preview.</h2>
+          </div>
+          <span class="preview-label">Illustrative demo data</span>
+        </div>
+
+        <div class="queue-panel">
+          <div class="queue-header">
+            <div>
+              <h3>Submission overview</h3>
+              <p>Example entries to demonstrate the proposed interface.</p>
+            </div>
+            <span class="queue-count">3 examples</span>
+          </div>
+
+          <div class="review-list">
+            {demoReviews.map((review) => (
+              <article class="review-item">
+                <div class="document-icon" aria-hidden="true">▤</div>
+                <div class="review-details">
+                  <h4>{review.title}</h4>
+                  <p>{review.id} · {review.course}</p>
+                </div>
+                <span class:list={['review-status', review.status === 'In progress' ? 'in-progress' : '']}>
+                  {review.status}
+                </span>
+              </article>
+            ))}
+          </div>
+
+          <p class="demo-notice">
+            These are sample records, not live student submissions.
+            Actual assignments must come from the authorised review service.
+          </p>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <a class="footer-brand" href="#home">IQTerra Peer Review</a>
+        <p>Structured assessment. Constructive feedback. Responsible moderation.</p>
+        <span>Frontend prototype</span>
+      </footer>
     </main>
   </body>
 </html>
+
 <style>
-  :global(*) { box-sizing: border-box; } :global(body) { margin: 0; background: #10161b; color: #edf4ed; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-  main { max-width: 1050px; margin: 0 auto; padding: 12vh 7vw; } .eyebrow { color: #91d6a0; letter-spacing: .12em; text-transform: uppercase; font-size: .78rem; font-weight: 700; }
-  h1 { max-width: 760px; font-size: clamp(3rem, 8vw, 7rem); line-height: .95; letter-spacing: -.06em; margin: 2rem 0; } .lede { max-width: 650px; color: #b5c3ba; font-size: 1.2rem; line-height: 1.6; }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 5rem; } article { border: 1px solid #334239; padding: 1.5rem; min-height: 220px; background: #16211b; } article span { color: #91d6a0; } h2 { margin-top: 3rem; } article p { color: #b5c3ba; line-height: 1.5; } .status { margin-top: 4rem; color: #91d6a0; } code { color: #fff; }
-  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  :global(*) {
+    box-sizing: border-box;
+  }
+
+  :global(html) {
+    scroll-behavior: smooth;
+  }
+
+  :global(body) {
+    margin: 0;
+    background: #f6f7f4;
+    color: #1c2b25;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+
+  :global(a) {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .topbar {
+    min-height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 14px 6%;
+    background: #fff;
+    border-bottom: 1px solid #e7ebe6;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .brand-mark {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: #e9f5e9;
+    color: #26764a;
+    font-size: 1rem;
+    font-weight: 800;
+  }
+
+  .brand strong,
+  .brand small {
+    display: block;
+  }
+
+  .brand strong {
+    font-size: 1.05rem;
+    letter-spacing: -.04em;
+  }
+
+  .brand small {
+    color: #7a877e;
+    font-size: .66rem;
+    letter-spacing: .14em;
+  }
+
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .nav-link {
+    padding: 9px 13px;
+    border-radius: 9px;
+    color: #68766c;
+    font-size: .88rem;
+  }
+
+  .nav-link:hover,
+  .nav-link.active {
+    background: #edf5ed;
+    color: #26764a;
+  }
+
+  .environment,
+  .preview-label,
+  .queue-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #e0e8df;
+    border-radius: 999px;
+    padding: 7px 12px;
+    color: #526c58;
+    background: #f7fbf5;
+    font-size: .78rem;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #48a76b;
+    flex: 0 0 auto;
+  }
+
+  main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 56px 32px 0;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1.35fr .8fr;
+    align-items: center;
+    gap: 48px;
+    padding: 38px 0 64px;
+  }
+
+  .eyebrow {
+    color: #43815a;
+    font-size: .73rem;
+    font-weight: 800;
+    letter-spacing: .15em;
+  }
+
+  h1 {
+    margin: 23px 0;
+    font-size: clamp(2.6rem, 5.2vw, 4.7rem);
+    line-height: 1.06;
+    letter-spacing: -.065em;
+  }
+
+  h1 span {
+    color: #42865a;
+  }
+
+  .lede {
+    max-width: 600px;
+    color: #68766d;
+    font-size: 1.08rem;
+    line-height: 1.8;
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 28px;
+  }
+
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 45px;
+    padding: 11px 17px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-size: .87rem;
+    font-weight: 700;
+    transition: transform .18s ease, background .18s ease;
+  }
+
+  .button:hover {
+    transform: translateY(-2px);
+  }
+
+  .primary {
+    background: #28764a;
+    color: white;
+  }
+
+  .primary:hover {
+    background: #1e603b;
+  }
+
+  .secondary {
+    border-color: #dce4db;
+    background: #fff;
+    color: #324a39;
+  }
+
+  .hero-panel {
+    padding: 30px;
+    border: 1px solid #2b4435;
+    border-radius: 19px;
+    background: #192d22;
+    color: #f3f8f1;
+    box-shadow: 0 20px 50px rgb(31 58 39 / 9%);
+  }
+
+  .panel-icon {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 15px;
+    background: #d6f0d9;
+    color: #26764a;
+    font-size: 1.7rem;
+  }
+
+  .panel-label {
+    margin-top: 28px;
+    color: #a4d9ad;
+    font-size: .69rem;
+    font-weight: 800;
+    letter-spacing: .14em;
+  }
+
+  .hero-panel h2 {
+    margin: 12px 0;
+    font-size: 1.7rem;
+    line-height: 1.25;
+    letter-spacing: -.04em;
+  }
+
+  .hero-panel > p:not(.panel-label) {
+    color: #c2d0c4;
+    font-size: .92rem;
+    line-height: 1.8;
+  }
+
+  .panel-footer {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 26px;
+    padding-top: 19px;
+    border-top: 1px solid #3b5041;
+    color: #d3e4d4;
+    font-size: .79rem;
+  }
+
+  .section {
+    padding: 42px 0;
+    scroll-margin-top: 30px;
+  }
+
+  .section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 24px;
+    margin-bottom: 24px;
+  }
+
+  .section-heading .eyebrow {
+    margin-bottom: 9px;
+  }
+
+  .section-heading h2 {
+    margin: 0;
+    font-size: clamp(1.7rem, 3vw, 2.35rem);
+    letter-spacing: -.05em;
+  }
+
+  .section-note {
+    max-width: 310px;
+    margin: 0;
+    color: #78847a;
+    font-size: .87rem;
+  }
+
+  .workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .workflow-card {
+    padding: 23px;
+    border: 1px solid #e3e9e1;
+    border-radius: 15px;
+    background: #fff;
+    transition: transform .18s ease, box-shadow .18s ease;
+  }
+
+  .workflow-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 14px 30px rgb(32 57 39 / 6%);
+  }
+
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .step-number {
+    color: #378054;
+    font-size: .91rem;
+    font-weight: 800;
+  }
+
+  .card-arrow {
+    color: #89988c;
+    font-size: 1.2rem;
+  }
+
+  .card-tag {
+    display: inline-block;
+    margin-top: 27px;
+    padding: 5px 9px;
+    border-radius: 6px;
+    background: #eff6ed;
+    color: #477553;
+    font-size: .7rem;
+    font-weight: 700;
+  }
+
+  .workflow-card h3 {
+    margin: 13px 0 9px;
+    font-size: 1.23rem;
+    letter-spacing: -.035em;
+  }
+
+  .workflow-card > p {
+    margin: 0;
+    color: #728076;
+    font-size: .9rem;
+    line-height: 1.8;
+  }
+
+  .queue-section {
+    padding-top: 54px;
+    padding-bottom: 70px;
+  }
+
+  .preview-label {
+    color: #826d3a;
+    border-color: #efe6c9;
+    background: #fffaf0;
+  }
+
+  .queue-panel {
+    overflow: hidden;
+    border: 1px solid #e3e9e1;
+    border-radius: 16px;
+    background: #fff;
+  }
+
+  .queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 23px;
+    border-bottom: 1px solid #edf0eb;
+  }
+
+  .queue-header h3 {
+    margin: 0 0 5px;
+    font-size: 1rem;
+  }
+
+  .queue-header p {
+    margin: 0;
+    color: #78847a;
+    font-size: .83rem;
+  }
+
+  .review-item {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 18px 23px;
+    border-bottom: 1px solid #edf0eb;
+  }
+
+  .review-item:last-child {
+    border-bottom: 0;
+  }
+
+  .document-icon {
+    display: grid;
+    place-items: center;
+    width: 43px;
+    height: 43px;
+    flex: 0 0 auto;
+    border-radius: 11px;
+    background: #eef5ed;
+    color: #3d8053;
+    font-size: 1.3rem;
+  }
+
+  .review-details {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .review-details h4 {
+    margin: 0;
+    font-size: .91rem;
+  }
+
+  .review-details p {
+    margin: 4px 0 0;
+    color: #7b877d;
+    font-size: .77rem;
+  }
+
+  .review-status {
+    padding: 6px 10px;
+    border-radius: 7px;
+    background: #edf6ed;
+    color: #38734b;
+    font-size: .75rem;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .review-status.in-progress {
+    background: #fff5df;
+    color: #936d20;
+  }
+
+  .demo-notice {
+    margin: 0;
+    padding: 16px 23px;
+    border-top: 1px solid #edf0eb;
+    background: #fafbf8;
+    color: #7a847b;
+    font-size: .77rem;
+    line-height: 1.7;
+  }
+
+  .footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 12px 24px;
+    padding: 25px 0 30px;
+    border-top: 1px solid #e0e6de;
+    color: #7b877d;
+    font-size: .78rem;
+  }
+
+  .footer p {
+    margin: 0;
+  }
+
+  .footer-brand {
+    color: #385c42;
+    font-weight: 800;
+  }
+
+  @media (max-width: 800px) {
+    .topbar {
+      flex-wrap: wrap;
+      padding: 14px 5%;
+    }
+
+    nav {
+      order: 3;
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    .hero {
+      grid-template-columns: 1fr;
+      gap: 30px;
+      padding-top: 20px;
+    }
+
+    .workflow-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .section-heading {
+      align-items: start;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    main {
+      padding-right: 22px;
+      padding-left: 22px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    main {
+      padding-top: 28px;
+    }
+
+    h1 {
+      font-size: 2.65rem;
+    }
+
+    .hero-panel {
+      padding: 23px;
+    }
+
+    .hero-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .review-item {
+      flex-wrap: wrap;
+      padding: 16px;
+    }
+
+    .review-status {
+      margin-left: 58px;
+    }
+
+    .queue-header {
+      align-items: start;
+      flex-direction: column;
+    }
+  }
 </style>
