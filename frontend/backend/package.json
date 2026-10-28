@@ -1,0 +1,25 @@
+{
+  "name": "iqterra-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "db:mig": "drizzle-kit generate && drizzle-kit push",
+    "db:seed": "tsx seed.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.38.0",
+    "hono": "^4.6.13",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.6",
+    "@types/node": "^20.17.16",
+    "drizzle-kit": "^0.30.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0"
+  }
+}
