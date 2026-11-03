@@ -1,0 +1,176 @@
+# IQT-02 Moodle Peer-Review Platform
+## Allocation Algorithm Specification
+
+**Project:** IQT-02 Moodle Peer-Review Platform  
+**Component:** Peer-review allocation engine  
+**Status:** Prototype tested  
+**Allocation configuration:** 50 students, 3 reviewers per submission
+
+## 1. Purpose
+
+The allocation engine assigns students to review submissions from other students. It aims to distribute review work fairly while maintaining anonymity and preventing conflicts between reviewers and submissions.
+
+The allocation logic is intended to run on the IQTerra service rather than inside the client’s Moodle instance.
+
+## 2. Functional requirements
+
+The allocation engine must satisfy the following requirements:
+
+1. Each submission receives the configured number of reviews.
+2. A student must not review their own submission.
+3. Reciprocal pairs must not occur: if student A reviews student B, student B must not review student A.
+4. Each submission must receive reviews from distinct reviewers.
+5. Reviewer workloads should be balanced as evenly as possible.
+6. Duplicate student identifiers must be rejected.
+7. Invalid configurations, including an insufficient cohort or an invalid reviewer count, must be rejected.
+8. The allocation engine must report an error when a valid allocation cannot be produced.
+
+## 3. Inputs and outputs
+
+### Inputs
+
+- A list of unique student identifiers.
+- The number of reviewers required per submission.
+- The allocation constraints described in this specification.
+
+### Outputs
+
+A collection of reviewer–submission pairs. Each pair identifies the student assigned to review a particular student's submission.
+
+For example, `(S01, S03)` means student S01 reviews the submission belonging to student S03.
+
+## 4. Allocation constraints
+
+Let:
+
+- \(N\) be the number of students.
+- \(k\) be the required number of reviewers per submission.
+- \(A\) be the set of reviewer–submission assignments.
+
+The required number of assignments is:
+
+\[
+|A|=N\times k
+\]
+
+For the current configuration:
+
+\[
+|A|=50\times3=150
+\]
+
+The following constraints must hold:
+
+**No self-review**
+
+\[
+(r,s)\in A\implies r\ne s
+\]
+
+**No reciprocal pair**
+
+\[
+(r,s)\in A\implies(s,r)\notin A
+\]
+
+**Exact review count**
+
+Every submission must receive exactly \(k\) reviews from distinct students.
+
+**Balanced workload**
+
+The number of reviews assigned to each reviewer should be as equal as possible. Where the assignment constraints permit it, the difference between the maximum and minimum reviewer workloads should be no greater than one.
+
+## 5. Allocation procedure
+
+The allocation process must:
+
+1. Validate the student identifiers and reviewer-count configuration.
+2. Reject duplicate student identifiers and configurations that do not meet the minimum cohort requirements.
+3. Generate candidate reviewer–submission assignments.
+4. Exclude assignments that would create a self-review or reciprocal pair.
+5. Ensure that a submission receives no more than the required number of distinct reviewers.
+6. Distribute review assignments to balance the workload across students.
+7. Check that all required assignments have been produced and that the allocation constraints are satisfied.
+8. Return the completed assignments or report an error if a valid allocation cannot be produced.
+
+The precise candidate-selection and recovery strategy should match the implementation in `app/allocation.py`.
+
+## 6. Worked example
+
+Consider four students: S01, S02, S03 and S04, with one review required per submission.
+
+One valid allocation is:
+
+| Reviewer | Submission reviewed |
+|---|---|
+| S01 | S02 |
+| S02 | S03 |
+| S03 | S04 |
+| S04 | S01 |
+
+This example demonstrates that each student reviews another student's submission, every submission receives one review, and no reciprocal pair exists.
+
+For the full project configuration of 50 students and three reviews per submission, the expected number of assignments is 150.
+
+## 7. Edge cases and error handling
+
+| Scenario | Expected behaviour |
+|---|---|
+| Duplicate student identifiers | Reject the input |
+| Fewer than three students | Reject the configuration |
+| Invalid reviewer count | Raise a validation error |
+| Student assigned to their own submission | Prohibit the assignment |
+| Reciprocal assignment would be created | Prohibit the assignment |
+| A submission has duplicate reviewers | Prevent duplicate reviewer assignments |
+| Reviewer workloads become uneven | Continue balancing assignments where constraints permit |
+| No valid allocation can be found | Report an error rather than return an invalid allocation |
+
+## 8. Verification and test evidence
+
+The allocation test suite is located in `tests/test_allocation.py`.
+
+The following tests have passed:
+
+- No self-allocation or reciprocal pairs.
+- Balanced reviewer workloads.
+- Duplicate student identifiers rejected.
+- Exactly three distinct reviewers per submission.
+- Too few students rejected.
+- Invalid review count rejected.
+
+The full project test suite also reported **9 tests passed**.
+
+A separate allocation check was run with 50 students and three reviewers per submission.
+
+| Verification measure | Observed result |
+|---|---:|
+| Students | 50 |
+| Total assignments | 150 |
+| Minimum reviewer workload | 3 |
+| Maximum reviewer workload | 3 |
+| Self-reviews | 0 |
+| Reciprocal pairs | 0 |
+| Minimum reviews per submission | 3 |
+| Maximum reviews per submission | 3 |
+
+These results demonstrate the allocation constraints for the tested configuration. They do not, by themselves, establish performance for every possible cohort size or prove integration with Moodle.
+
+## 9. Limitations and future work
+
+The current prototype verifies the allocation engine independently. Further work is required to demonstrate the complete Moodle-to-IQTerra workflow.
+
+Future work includes:
+
+- Integrating the service through LTI 1.3.
+- Retrieving course membership through NRPS.
+- Implementing rubric authoring and moderation workflows.
+- Demonstrating final grade passback through AGS.
+- Testing tenant isolation and documenting the deployment boundary.
+- Running end-to-end tests against a Moodle sandbox.
+
+## 10. Conclusion
+
+The tested allocation engine produced 150 assignments for a cohort of 50 students, with three reviews per submission and a reviewer workload of three assignments each. The observed results contained no self-reviews or reciprocal pairs.
+
+This provides evidence that the allocation constraints are satisfied for the tested cohort. Full platform completion remains dependent on the integration, moderation, security and deployment deliverables described above.
