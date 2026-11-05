@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vite/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Mutable local app data; build_download_bundle.py snapshots these into the ZIP.
+data/iqterra.sqlite3
+data/iqterra.sqlite3-*
+data/uploads/
+data/backups/

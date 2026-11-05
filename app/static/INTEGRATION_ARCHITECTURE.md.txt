@@ -1,0 +1,97 @@
+# IQT-02 Moodle Peer-Review Platform
+## Integration Architecture and Trust Boundary
+
+**Project:** IQT-02 Moodle Peer-Review Platform  
+**Architecture status:** Proposed design; end-to-end Moodle integration not yet verified
+
+## 1. Architecture objective
+
+The system separates Moodle's learning-management responsibilities from IQTerra's peer-review processing.
+
+Moodle remains responsible for course enrolment, assignment submissions and the course gradebook. IQTerra provides the external peer-review service, including allocation, rubric processing, review collection and moderation.
+
+The design aims to keep sensitive allocation rules, rubric weights and moderation configuration on IQTerra-controlled infrastructure.
+
+## 2. High-level architecture
+
+```text
++-----------------------------------------+
+|          CLIENT MOODLE INSTANCE         |
+|                                         |
+|  Course and enrolment records           |
+|  Assignment and submission management   |
+|  Moodle gradebook                       |
+|  LTI 1.3 external-tool registration     |
++-------------------+---------------------+
+                    |
+                    | LTI 1.3 launch
+                    | Validated identity,
+                    | course and role claims
+                    v
+========== TRUST / NETWORK BOUNDARY ==========
+                    |
+                    v
++-----------------------------------------+
+|          IQTERRA PEER-REVIEW SERVICE     |
+|                                         |
+|  LTI launch validation and sessions     |
+|  Tenant and course context              |
+|  NRPS roster integration                |
+|  Allocation engine                      |
+|  Rubric and review processing           |
+|  Moderation and flagging                 |
+|  Final-grade calculation                |
+|                                         |
+|  IQTerra-controlled database             |
+|  Server-side rules and configuration    |
++-------------------+---------------------+
+                    |
+                    | Approved final scores
+                    | AGS line-item / score
+                    | submission, when enabled
+                    v
+========== TRUST / NETWORK BOUNDARY ==========
+                    |
+                    v
++-----------------------------------------+
+|             MOODLE GRADEBOOK            |
+|                                         |
+|  Receives approved grades through AGS   |
++-----------------------------------------+
+```
+
+**Important:** This diagram represents the intended architecture. The current prototype does not yet demonstrate a complete LTI 1.3 launch, NRPS roster retrieval or AGS grade passback.
+
+## 3. Components and responsibilities
+
+### 3.1 Client Moodle instance
+
+Moodle retains ownership of:
+
+- Course and enrolment management.
+- Student submissions and associated learning activities.
+- Registration of the external LTI tool.
+- The course gradebook and final grade records.
+
+Moodle launches the external service through an LTI 1.3 integration. The client Moodle instance should not contain the private allocation implementation or authoritative rubric-weight configuration.
+
+### 3.2 IQTerra service
+
+IQTerra is responsible for:
+
+- Validating LTI launch messages and establishing an authenticated application session.
+- Associating requests with the correct tenant, course and user.
+- Obtaining roster information through NRPS when authorised.
+- Creating and validating peer-review allocations.
+- Providing the reviewer interface.
+- Applying rubric rules and processing submitted reviews.
+- Supporting moderation and flagging.
+- Sending approved grades back to Moodle through AGS.
+
+These responsibilities describe the intended service design. Each integration feature must be implemented and tested before it can be claimed as operational.
+
+### 3.3 IQTerra database
+
+The database stores the information required for the peer-review workflow, including tenant and course context, student references, submissions, allocations, reviews, rubric data and moderation records.
+
+The database design must enforce appropriate relationships and access restrictions.

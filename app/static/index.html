@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IQT-02 | Moodle Peer-Review Platform</title>
+  <style>
+    :root{--navy:#17243a;--navy2:#223550;--blue:#4263eb;--blue-light:#edf1ff;--ink:#202b3c;--muted:#6f7c8f;--line:#e4e9f1;--bg:#f5f7fb;--white:#fff;--green:#17865b;--green-bg:#e8f7ef;--amber:#a66b08;--amber-bg:#fff5dc;--red:#b42318;--shadow:0 8px 28px rgba(28,44,70,.06)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,Segoe UI,Arial,sans-serif}button{font:inherit;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.app{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:246px;background:var(--navy);color:#e8eef8;padding:24px 15px;display:flex;flex-direction:column;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 27px;border-bottom:1px solid rgba(255,255,255,.12)}.brand-mark{width:38px;height:38px;display:grid;place-items:center;background:#dce5ff;color:#263f9c;border-radius:11px;font-weight:800;font-size:15px}.brand strong{display:block;font-size:15px;letter-spacing:.2px}.brand small{display:block;color:#aebbd0;font-size:11px;margin-top:2px}.nav-label{padding:23px 11px 8px;color:#98a9c2;font-size:10px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase}.nav-button{width:100%;border:0;background:transparent;color:#d0d9e8;text-align:left;padding:11px 12px;border-radius:9px;display:flex;align-items:center;gap:11px;margin:2px 0;font-size:13px}.nav-button .nav-icon{width:20px;text-align:center;font-size:16px}.nav-button:hover,.nav-button.active{background:#2c4264;color:white}.nav-button.active{box-shadow:inset 3px 0 #91a8ff}.sidebar-foot{margin-top:auto;padding:15px 10px 0;border-top:1px solid rgba(255,255,255,.12);color:#9fb0c8;font-size:11px}.sidebar-foot strong{display:block;color:#e8eef8;font-size:12px;margin-bottom:3px}.main{margin-left:246px;min-height:100vh}.topbar{height:76px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 34px}.eyebrow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.1px;font-weight:700}.topbar h2{font-size:17px;margin:3px 0 0}.profile{display:flex;align-items:center;gap:10px;color:#5e6b7e;font-size:12px}.avatar{width:35px;height:35px;border-radius:50%;background:#e9edff;color:#354cb2;display:grid;place-items:center;font-weight:800}.content{padding:29px 34px 42px;max-width:1500px;margin:0 auto}.page{display:none}.page.active{display:block}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px}.page-heading h1{font-size:27px;letter-spacing:-.6px;margin:0 0 5px}.page-heading p{color:var(--muted);margin:0;font-size:13px}.actions{display:flex;gap:9px;flex-wrap:wrap}.btn{border:1px solid #d9e0ec;background:white;color:#344158;border-radius:8px;padding:10px 14px;font-weight:650;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:7px}.btn:hover{background:#f7f9fc}.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn.primary:hover{background:#3453d5}.btn.small{padding:7px 10px;font-size:11px}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stat,.panel,.workflow-card{background:#fff;border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow)}.stat{padding:18px 19px}.stat-top{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px;font-weight:600}.stat-icon{width:32px;height:32px;border-radius:9px;background:#f0f3ff;color:#5269db;display:grid;place-items:center;font-size:16px}.stat-value{font-size:29px;line-height:1.25;font-weight:750;letter-spacing:-.8px;margin:12px 0 5px}.stat-note{font-size:11px;color:var(--muted)}.status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#a6afbd;margin-right:5px}.status-dot.good{background:#23a26d}.status-dot.bad{background:#dc534a}.section-title{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-title h3{font-size:15px;margin:0}.section-title p{margin:3px 0 0;color:var(--muted);font-size:12px}.workflow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.workflow-card{padding:16px 15px;text-align:left;border:1px solid var(--line);width:100%;color:var(--ink);transition:transform .15s,border-color .15s}.workflow-card:hover{transform:translateY(-2px);border-color:#bdc9ff}.step-icon{width:37px;height:37px;border-radius:10px;background:var(--blue-light);color:#435fe0;display:grid;place-items:center;font-size:18px;margin-bottom:12px}.workflow-card strong{display:block;font-size:12px;margin-bottom:4px}.workflow-card p{font-size:11px;color:var(--muted);margin:0;min-height:32px}.workflow-card .step-foot{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #edf0f5;margin-top:12px;padding-top:10px;font-size:10px;color:#5c6b82}.layout-two{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);gap:16px;margin-top:19px}.panel{padding:20px}.panel-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:17px}.panel-header h3{font-size:14px;margin:0 0 4px}.panel-header p{font-size:11px;color:var(--muted);margin:0}.pill{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:99px;background:#f0f3f8;color:#5c687b;font-size:10px;font-weight:700;white-space:nowrap}.pill.good{background:var(--green-bg);color:var(--green)}.pill.warn{background:var(--amber-bg);color:var(--amber)}.empty-state{border:1px dashed #dbe2ed;border-radius:10px;padding:22px;text-align:center;color:var(--muted);font-size:12px}.health-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #edf0f5;font-size:12px}.health-row:last-of-type{border-bottom:0}.health-label{display:flex;align-items:center;gap:8px}.health-value{color:var(--muted);font-size:11px}.message{padding:11px 13px;border-radius:8px;background:#f3f6ff;color:#4b5f9b;font-size:11px;margin-top:12px}.message.error{background:#fff0ef;color:var(--red)}.message.success{background:var(--green-bg);color:var(--green)}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;color:#778397;font-size:10px;text-transform:uppercase;letter-spacing:.55px;font-weight:750;background:#f8f9fc}th,td{padding:12px 11px;border-bottom:1px solid #edf0f5;white-space:nowrap}td{color:#354258}tbody tr:last-child td{border-bottom:0}.table-empty{text-align:center;color:var(--muted);padding:25px}.subtle{font-size:11px;color:var(--muted)}.notice{padding:15px 16px;border:1px solid #f0dca7;background:#fff9e9;border-radius:10px;color:#79551b;font-size:12px;margin-bottom:18px}.feature-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.feature{padding:18px;border:1px solid var(--line);border-radius:11px;background:#fff}.feature h3{font-size:13px;margin:0 0 6px}.feature p{font-size:12px;color:var(--muted);margin:0}.feature .pill{margin-top:13px}.footer-note{font-size:11px;color:var(--muted);margin-top:24px;text-align:center}.mobile-menu{display:none}
+    @media(max-width:1100px){.sidebar{width:215px}.main{margin-left:215px}.content{padding:25px 22px}.topbar{padding:0 22px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow{grid-template-columns:repeat(3,minmax(0,1fr))}.layout-two{grid-template-columns:1fr}}
+    @media(max-width:700px){.sidebar{width:100%;height:auto;position:relative;padding:13px}.brand{padding:0 5px 12px}.sidebar nav,.nav-label,.sidebar-foot{display:none}.sidebar.mobile-open nav,.sidebar.mobile-open .nav-label{display:block}.sidebar.mobile-open .nav-button{display:inline-flex;width:48%;vertical-align:top}.main{margin-left:0}.topbar{height:65px;padding:0 16px}.mobile-menu{display:inline-flex}.profile span{display:none}.content{padding:22px 14px}.page-heading{display:block}.page-heading h1{font-size:23px}.page-heading .actions{margin-top:14px}.stats{gap:9px}.stat{padding:14px}.stat-value{font-size:25px}.workflow{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-card{padding:13px}.feature-grid{grid-template-columns:1fr}.panel{padding:15px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><div class="brand-mark">IQ</div><div><strong>IQT-02</strong><small>Moodle Peer Review</small></div></div>
+    <nav aria-label="Main navigation">
+      <div class="nav-label">Workspace</div>
+      <button class="nav-button active" data-page="dashboard"><span class="nav-icon">▦</span>Dashboard</button>
+      <button class="nav-button" data-page="rubric"><span class="nav-icon">☷</span>Rubric Builder</button>
+      <button class="nav-button" data-page="allocation"><span class="nav-icon">⤴</span>Allocation</button>
+      <button class="nav-button" data-page="moderation"><span class="nav-icon">◉</span>Moderation</button>
+      <button class="nav-button" data-page="release"><span class="nav-icon">✓</span>Release Marks</button>
+      <div class="nav-label">Review activity</div>
+      <button class="nav-button" data-page="submissions"><span class="nav-icon">▤</span>Submissions</button>
+      <button class="nav-button" data-page="reviews"><span class="nav-icon">✎</span>Peer Reviews</button>
+      <button class="nav-button" data-page="system"><span class="nav-icon">⚙</span>System Status</button>
+    </nav>
+    <div class="sidebar-foot"><strong>Prototype environment</strong>Local development · IQT-02<br>Backend: FastAPI + SQLite</div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div style="display:flex;align-items:center;gap:12px"><button class="btn mobile-menu" id="mobileMenu" aria-label="Toggle navigation">☰</button><div><div class="eyebrow">Instructor workspace</div><h2 id="topTitle">Dashboard overview</h2></div></div><div class="profile"><div class="avatar">IN</div><span>Instructor / Administrator</span></div></header>
+    <div class="content">
+      <section class="page active" id="page-dashboard">
+        <div class="page-heading"><div><h1>Good morning</h1><p>Monitor your peer-review workflow and manage allocation activity.</p></div><div class="actions"><button class="btn" id="healthButton">↻ Check system health</button><button class="btn primary" id="run">＋ Generate demo allocation</button></div></div>
+        <div class="stats">
+          <div class="stat"><div class="stat-top">Demo students <span class="stat-icon">♙</span></div><div class="stat-value">50</div><div class="stat-note">Synthetic test participants</div></div>
+          <div class="stat"><div class="stat-top">Reviewers per submission <span class="stat-icon">⇄</span></div><div class="stat-value">3</div><div class="stat-note">Configured demo allocation</div></div>
+          <div class="stat"><div class="stat-top">Saved assignments <span class="stat-icon">▤</span></div><div class="stat-value" id="allocationCount">—</div><div class="stat-note">Records stored in local SQLite</div></div>
+          <div class="stat"><div class="stat-top">API health <span class="stat-icon">♥</span></div><div class="stat-value" style="font-size:23px" id="healthValue">Checking…</div><div class="stat-note" id="healthNote"><span class="status-dot"></span>Connecting to backend</div></div>
+        </div>
+        <div class="section-title"><div><h3>Peer-review workflow</h3><p>Navigate between the main areas of the proposed platform.</p></div></div>
+        <div class="workflow">
+          <button class="workflow-card" data-page="submissions"><span class="step-icon">⇧</span><strong>1. Submissions</strong><p>Manage student work and submission status.</p><div class="step-foot"><span>Planned workflow</span><span>→</span></div></button>
+          <button class="workflow-card" data-page="allocation"><span class="step-icon">⤴</span><strong>2. Allocate reviewers</strong><p>Generate and save a balanced review allocation.</p><div class="step-foot"><span>Demo available</span><span>→</span></div></button>
+          <button class="workflow-card" data-page="reviews"><span class="step-icon">✎</span><strong>3. Peer reviews</strong><p>Review assigned submissions with a rubric.</p><div class="step-foot"><span>Planned workflow</span><span>→</span></div></button>
+          <button class="workflow-card" data-page="moderation"><span class="step-icon">◉</span><strong>4. Moderation</strong><p>Check submitted feedback before release.</p><div class="step-foot"><span>Planned workflow</span><span>→</span></div></button>
+          <button class="workflow-card" data-page="release"><span class="step-icon">✓</span><strong>5. Release marks</strong><p>Release approved outcomes to students.</p><div class="step-foot"><span>Planned workflow</span><span>→</span></div></button>
+        </div>
+        <div class="layout-two">
+          <div class="panel"><div class="panel-header"><div><h3>Recent allocation activity</h3><p>Latest saved reviewer-to-submission assignments</p></div><button class="btn small" data-page="allocation">View allocation</button></div><div class="table-wrap"><table><thead><tr><th>Reviewer</th><th>Submission</th><th>Submission owner</th></tr></thead><tbody id="savedAllocationsBody"><tr><td colspan="3" class="table-empty">Loading saved assignments…</td></tr></tbody></table></div><div class="subtle" id="savedAllocationStatus" style="margin-top:10px">Loading records from the API.</div></div>
+          <div class="panel"><div class="panel-header"><div><h3>System status</h3><p>Local prototype connectivity</p></div><span class="pill" id="healthPill">Checking</span></div><div class="health-row"><span class="health-label"><span class="status-dot" id="apiDot"></span>FastAPI backend</span><span class="health-value" id="apiStatus">Checking…</span></div><div class="health-row"><span class="health-label"><span class="status-dot" id="dbDot"></span>Allocation storage</span><span class="health-value" id="dbStatus">Checking…</span></div><div class="message" id="healthMessage">The dashboard will check the API when it loads.</div><div style="margin-top:14px"><button class="btn" id="healthButton2">Run health check</button></div></div>
+        </div>
+        <div class="panel" style="margin-top:16px"><div class="panel-header"><div><h3>Demo allocation output</h3><p>Results from the latest generate-and-save request</p></div><span class="pill">Synthetic data only</span></div><div id="output" class="empty-state">No new allocation generated in this session. Select “Generate demo allocation” to test the existing backend.</div></div>
+      </section>
+
+      <section class="page" id="page-allocation">
+        <div class="page-heading"><div><h1>Reviewer allocation</h1><p>Generate demo reviewer assignments and inspect records saved in SQLite.</p></div><div class="actions"><button class="btn" id="refreshSavedAllocationsBtn">↻ Refresh records</button><button class="btn primary" id="allocationGenerate2">＋ Generate and save</button></div></div>
+        <div class="notice"><strong>Prototype scope:</strong> this action uses synthetic demo students. It does not allocate real Moodle students or submissions.</div>
+        <div class="stats"><div class="stat"><div class="stat-top">Saved assignments <span class="stat-icon">▤</span></div><div class="stat-value" id="allocationCount2">—</div><div class="stat-note">Records returned by the API</div></div><div class="stat"><div class="stat-top">Demo reviewers <span class="stat-icon">♙</span></div><div class="stat-value">50</div><div class="stat-note">Synthetic participant set</div></div><div class="stat"><div class="stat-top">Reviewers per submission <span class="stat-icon">⇄</span></div><div class="stat-value">3</div><div class="stat-note">Current demo setting</div></div><div class="stat"><div class="stat-top">Allocation state <span class="stat-icon">◷</span></div><div class="stat-value" style="font-size:20px">Local demo</div><div class="stat-note">Not connected to Moodle</div></div></div>
+        <div class="panel"><div class="panel-header"><div><h3>Saved assignments</h3><p>Most recent records returned by <code>GET /api/allocations</code></p></div><span class="pill" id="allocationPagePill">Waiting for API</span></div><div class="table-wrap"><table><thead><tr><th>Reviewer</th><th>Submission</th><th>Submission owner</th></tr></thead><tbody id="allocationTableBody"><tr><td colspan="3" class="table-empty">Loading saved assignments…</td></tr></tbody></table></div><div class="subtle" id="allocationPageStatus" style="margin-top:12px">Records refresh when this page opens or when you press refresh.</div></div>
+        <div class="panel" style="margin-top:16px"><div class="panel-header"><div><h3>Latest generation result</h3><p>Outcome of the most recent allocation request</p></div></div><div id="allocationOutput" class="empty-state">No allocation generated in this session.</div></div>
+      </section>
+
+      <section class="page" id="page-rubric"><div class="page-heading"><div><h1>Rubric builder</h1><p>Design concept for configurable peer-review criteria.</p></div></div><div class="notice"><strong>Not yet connected:</strong> this screen is a placeholder. Rubric creation, editing and database storage have not been implemented.</div><div class="feature-grid"><div class="feature"><h3>Criteria and descriptions</h3><p>Define the dimensions students should assess, with clear descriptions for each criterion.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Scoring levels</h3><p>Configure rating levels and score values to support consistent feedback.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Rubric preview</h3><p>Preview how a rubric may appear while a student reviews a submission.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Versioning</h3><p>Keep a record of rubric changes once persistence is implemented.</p><span class="pill">Planned feature</span></div></div></section>
+
+      <section class="page" id="page-submissions"><div class="page-heading"><div><h1>Submissions</h1><p>Student submission management concept.</p></div></div><div class="notice"><strong>Not yet implemented:</strong> the current demo allocation uses synthetic IDs. It does not upload, list or retrieve real student submissions.</div><div class="feature-grid"><div class="feature"><h3>Submission list</h3><p>Future view for assignment, student, submission time and status.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Moodle connection</h3><p>Retrieve course and assignment data through an authenticated integration.</p><span class="pill">Integration required</span></div></div></section>
+
+      <section class="page" id="page-reviews"><div class="page-heading"><div><h1>Peer reviews</h1><p>Reviewer workspace concept.</p></div></div><div class="notice"><strong>Not yet implemented:</strong> reviewer assignments can be generated and saved, but students cannot yet open a submission, enter rubric scores or submit written feedback.</div><div class="feature-grid"><div class="feature"><h3>Assigned reviews</h3><p>Future list of submissions assigned to the logged-in reviewer.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Feedback form</h3><p>Future rubric scoring, written comments, validation and submission status.</p><span class="pill">Planned feature</span></div></div></section>
+
+      <section class="page" id="page-moderation"><div class="page-heading"><div><h1>Moderation queue</h1><p>Instructor checks before feedback or marks are released.</p></div></div><div class="notice"><strong>Not yet implemented:</strong> there is no moderation API or persisted moderation state yet.</div><div class="feature-grid"><div class="feature"><h3>Pending moderation</h3><p>Future queue of submitted reviews awaiting instructor checks.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Review decisions</h3><p>Future approve, return for revision and audit-history actions.</p><span class="pill">Planned feature</span></div></div></section>
+
+      <section class="page" id="page-release"><div class="page-heading"><div><h1>Release marks</h1><p>Controlled release of reviewed feedback and outcomes.</p></div></div><div class="notice"><strong>Not yet implemented:</strong> no marks or feedback are released by this prototype. Do not use it for real student assessment.</div><div class="feature-grid"><div class="feature"><h3>Release readiness</h3><p>Future validation that required reviews and moderation checks are complete.</p><span class="pill">Planned feature</span></div><div class="feature"><h3>Release history</h3><p>Future audit log of what was released, by whom and when.</p><span class="pill">Planned feature</span></div></div></section>
+
+      <section class="page" id="page-system"><div class="page-heading"><div><h1>System status</h1><p>Check whether the local backend responds to requests.</p></div><div class="actions"><button class="btn primary" id="systemHealthButton">↻ Run health check</button></div></div><div class="panel"><div class="panel-header"><div><h3>API health</h3><p>Uses the existing <code>GET /health</code> endpoint.</p></div><span class="pill" id="systemHealthPill">Not checked</span></div><div id="systemHealthResult" class="empty-state">Press “Run health check” to check the backend.</div></div><div class="panel" style="margin-top:16px"><h3 style="margin-top:0;font-size:14px">Current implementation boundary</h3><div class="health-row"><span>FastAPI health endpoint</span><span class="pill good">Available in prototype</span></div><div class="health-row"><span>Demo allocation and SQLite persistence</span><span class="pill good">Available in prototype</span></div><div class="health-row"><span>Authentication and role permissions</span><span class="pill warn">Not implemented</span></div><div class="health-row"><span>Moodle LTI 1.3 integration</span><span class="pill warn">Not implemented</span></div><div class="health-row"><span>Review feedback, moderation and release</span><span class="pill warn">Not implemented</span></div></div></section>
+      <div class="footer-note">IQT-02 · Local development prototype · Use synthetic data only until security and Moodle integration are implemented.</div>
+    </div>
+  </main>
+</div>
+<script>
+  const pageTitles = {dashboard:'Dashboard overview',rubric:'Rubric builder',allocation:'Reviewer allocation',moderation:'Moderation queue',release:'Release marks',submissions:'Submissions',reviews:'Peer reviews',system:'System status'};
+  const $ = (id) => document.getElementById(id);
+  function showPage(name){
+    document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id===`page-${name}`));
+    document.querySelectorAll('[data-page]').forEach(b=>b.classList.toggle('active',b.classList.contains('nav-button') && b.dataset.page===name));
+    $('topTitle').textContent=pageTitles[name]||'IQT-02';
+    $('sidebar').classList.remove('mobile-open');
+    if(name==='allocation') loadAllocationPage();
+    if(name==='dashboard') loadSavedAllocations();
+  }
+  document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));
+  $('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('mobile-open'));
+
+  function escapeHtml(value){return String(value??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function showMessage(target,message,type='info'){target.className='message'+(type==='error'?' error':type==='success'?' success':'');target.textContent=message;}
+  async function checkHealth(){
+    ['healthButton','healthButton2','systemHealthButton'].forEach(id=>{if($(id))$(id).disabled=true;});
+    try{
+      const response=await fetch('/health');
+      if(!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data=await response.json();
+      const resultText=typeof data==='string'?data:JSON.stringify(data);
+      $('healthValue').textContent='Healthy';$('healthValue').style.color='var(--green)';$('healthNote').innerHTML='<span class="status-dot good"></span>API responded successfully';
+      $('healthPill').textContent='Healthy';$('healthPill').className='pill good';$('apiDot').className='status-dot good';$('apiStatus').textContent='Responding';$('dbDot').className='status-dot good';$('dbStatus').textContent='API reachable';
+      showMessage($('healthMessage'),`Health endpoint responded: ${resultText}`,'success');
+      if($('systemHealthResult'))$('systemHealthResult').innerHTML=`<span class="status-dot good"></span> ${escapeHtml(resultText)}`;
+      if($('systemHealthPill')){$('systemHealthPill').textContent='Healthy';$('systemHealthPill').className='pill good';}
+    }catch(error){
+      $('healthValue').textContent='Offline';$('healthValue').style.color='var(--red)';$('healthNote').innerHTML='<span class="status-dot bad"></span>Could not reach API';$('healthPill').textContent='Unavailable';$('healthPill').className='pill warn';$('apiDot').className='status-dot bad';$('apiStatus').textContent='Not reachable';$('dbDot').className='status-dot';$('dbStatus').textContent='Not checked';
+      showMessage($('healthMessage'),`Could not reach /health (${error.message}). Make sure FastAPI is running, then refresh.`,'error');
+      if($('systemHealthResult'))$('systemHealthResult').textContent=`Could not reach /health (${error.message}). Make sure the FastAPI server is running.`;
+      if($('systemHealthPill')){$('systemHealthPill').textContent='Unavailable';$('systemHealthPill').className='pill warn';}
+    }finally{['healthButton','healthButton2','systemHealthButton'].forEach(id=>{if($(id))$(id).disabled=false;});}
+  }
+  async function getAssignments(){
+    const response=await fetch('/api/allocations');
+    if(!response.ok)throw new Error(`GET /api/allocations returned HTTP ${response.status}`);
+    const data=await response.json();
+    if(Array.isArray(data))return data;
+    if(data&&Array.isArray(data.assignments))return data.assignments;
+    if(data&&Array.isArray(data.allocations))return data.allocations;
+    return [];
+  }
+ 
+function assignmentRows(items){
+    if(!items.length){
+        return '<tr><td colspan="3" class="table-empty">No saved assignments found. Generate a demo allocation to create records.</td></tr>';
+    }
+
+    return items.map(a=>`<tr>
+        <td>${escapeHtml(a.reviewer_name||a.reviewer_id||a.reviewer||'—')}</td>
+        <td>${escapeHtml(a.submission_title||a.submission_id||a.submission||'—')}</td>
+        <td>${escapeHtml(a.submission_owner_id||a.owner_id||a.student_id||'—')}</td>
+    </tr>`).join('');
+}
+
+  async function loadSavedAllocations(){
+    const body=$('savedAllocationsBody');body.innerHTML='<tr><td colspan="3" class="table-empty">Loading saved assignments…</td></tr>';
+    try{const items=await getAssignments();body.innerHTML=assignmentRows(items);$('allocationCount').textContent=items.length;$('savedAllocationStatus').textContent=`${items.length} saved assignment record(s) returned by the API.`;}
+    catch(error){body.innerHTML=`<tr><td colspan="3" class="table-empty">Could not load records: ${escapeHtml(error.message)}</td></tr>`;$('allocationCount').textContent='—';$('savedAllocationStatus').textContent='Check that the FastAPI server is running and GET /api/allocations is available.';}
+  }
+  async function loadAllocationPage(){
+    const body=$('allocationTableBody');body.innerHTML='<tr><td colspan="3" class="table-empty">Loading saved assignments…</td></tr>';
+    try{const items=await getAssignments();body.innerHTML=assignmentRows(items);$('allocationCount2').textContent=items.length;$('allocationPagePill').textContent=`${items.length} records`;$('allocationPagePill').className='pill good';$('allocationPageStatus').textContent=`Loaded ${items.length} saved assignment record(s).`}
+    catch(error){body.innerHTML=`<tr><td colspan="3" class="table-empty">Could not load records: ${escapeHtml(error.message)}</td></tr>`;$('allocationCount2').textContent='—';$('allocationPagePill').textContent='API error';$('allocationPagePill').className='pill warn';$('allocationPageStatus').textContent=error.message;}
+  }
+  function displayAllocationResult(data){
+    const assignments=data.assignments||[];
+    const html=`<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px"><div><div class="subtle">Assignments generated</div><strong style="font-size:22px">${assignments.length}</strong></div><div><div class="subtle">Review load range</div><strong style="font-size:22px">${escapeHtml(data.review_load_min??data.min_reviews_per_reviewer??'—')} – ${escapeHtml(data.review_load_max??data.max_reviews_per_reviewer??'—')}</strong></div><div><div class="subtle">Save result</div><strong style="font-size:14px;color:var(--green)">${escapeHtml(data.saveMessage||'Saved request completed')}</strong></div></div><div class="table-wrap"><table><thead><tr><th>Reviewer</th><th>Submission</th><th>Submission owner</th></tr></thead><tbody>${assignments.slice(0,6).map(a=>`<tr><td>${escapeHtml(a.reviewer_name||a.reviewer_id||a.reviewer||'—')}</td><td>${escapeHtml(a.submission_title||a.submission_id||a.submission||'—')}</td><td>${escapeHtml(a.submission_owner_id||a.owner_id||a.student_id||'—')}</td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">No assignment details returned.</td></tr>'}</tbody></table></div><div class="subtle" style="margin-top:10px">Showing up to 6 of ${assignments.length} generated assignments.</div>`;
+    $('output').className='';$('output').innerHTML=html;$('allocationOutput').className='';$('allocationOutput').innerHTML=html;
+  }
+  let generating=false;
+  async function generateAllocation(){
+    if(generating)return;generating=true;
+    ['run','dashboardGenerate','allocationGenerate2'].forEach(id=>{if($(id))$(id).disabled=true;});
+    $('output').className='empty-state';$('output').textContent='Generating demo allocation and saving assignments…';$('allocationOutput').className='empty-state';$('allocationOutput').textContent='Generating demo allocation and saving assignments…';
+    try{
+      const response=await fetch('/api/demo/allocation',{method:'POST'});
+      if(!response.ok)throw new Error(`Allocation request returned HTTP ${response.status}`);
+      const data=await response.json();
+      if(!Array.isArray(data.assignments))throw new Error('The allocation response did not contain an assignments array.');
+      const saveResponse=await fetch('/api/demo/allocation/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignments:data.assignments})});
+      if(!saveResponse.ok)throw new Error(`Allocation generated, but saving returned HTTP ${saveResponse.status}`);
+      const saved=await saveResponse.json();
+      data.saveMessage=saved.message||saved.status||`Save request successful${saved.saved_count!==undefined?`: ${saved.saved_count} saved`:''}`;
+      displayAllocationResult(data);await loadSavedAllocations();await loadAllocationPage();
+    }catch(error){const message=`Could not complete allocation: ${error.message}. Check that the FastAPI server is running and the existing endpoints are available.`;$('output').className='message error';$('output').textContent=message;$('allocationOutput').className='message error';$('allocationOutput').textContent=message;}
+    finally{generating=false;['run','dashboardGenerate','allocationGenerate2'].forEach(id=>{if($(id))$(id).disabled=false;});}
+  }
+  ['run','allocationGenerate2'].forEach(id=>$(id).addEventListener('click',generateAllocation));
+  $('healthButton').addEventListener('click',checkHealth);$('healthButton2').addEventListener('click',checkHealth);$('systemHealthButton').addEventListener('click',checkHealth);
+  $('refreshSavedAllocationsBtn').addEventListener('click',loadAllocationPage);
+  window.addEventListener('DOMContentLoaded',()=>{checkHealth();loadSavedAllocations();});
+</script>
+</body>
+</html>
+
+
+<section id="peer-review-panel" style="margin:24px 24px 24px 280px;padding:24px;max-width:1100px;box-sizing:border-box;width:calc(100% - 304px);background:#fff;border:1px solid #ddd;border-radius:12px;font-family:Arial,sans-serif;color:#222;overflow-wrap:anywhere;">
+  <h2>Peer Review Centre</h2>
+  <p>Select an allocated submission, enter a score, and provide constructive feedback.</p>
+
+  <button type="button" id="pr-load-allocations" style="padding:10px 16px;cursor:pointer;">Load Allocations</button>
+  <label for="pr-allocation" style="display:block;margin-top:18px;">Allocated submission</label>
+  <select id="pr-allocation" style="display:block;width:100%;padding:10px;margin-top:6px;">
+    <option value="">Click Load Allocations first</option>
+  </select>
+
+  
+  <h3 style="margin-top:22px;">Assessment Rubric</h3>
+  <p>Score each criterion from 0 to 100. The weighted total will be calculated automatically.</p>
+
+  <label for="pr-understanding" style="display:block;margin-top:14px;">Understanding of the topic (40%)</label>
+  <input id="pr-understanding" type="number" min="0" max="100" step="1" value="85" style="display:block;width:100%;padding:10px;box-sizing:border-box;margin-top:6px;">
+
+  <label for="pr-evidence" style="display:block;margin-top:14px;">Evidence and analysis (35%)</label>
+  <input id="pr-evidence" type="number" min="0" max="100" step="1" value="80" style="display:block;width:100%;padding:10px;box-sizing:border-box;margin-top:6px;">
+
+  <label for="pr-clarity" style="display:block;margin-top:14px;">Clarity and presentation (25%)</label>
+  <input id="pr-clarity" type="number" min="0" max="100" step="1" value="90" style="display:block;width:100%;padding:10px;box-sizing:border-box;margin-top:6px;">
+
+  <label for="pr-score" style="display:block;margin-top:14px;">Calculated weighted score (0–100)</label>
+  <input id="pr-score" type="number" min="0" max="100" step="1" value="85" readonly style="display:block;width:100%;padding:10px;box-sizing:border-box;margin-top:6px;">
+
+  <label for="pr-feedback" style="display:block;margin-top:14px;">Written feedback</label>
+  <textarea id="pr-feedback" rows="4" placeholder="Write constructive feedback..." style="display:block;width:100%;padding:10px;box-sizing:border-box;margin-top:6px;"></textarea>
+
+  <button type="button" id="pr-submit" style="padding:11px 18px;margin-top:16px;cursor:pointer;">Submit Review</button>
+  <p id="pr-message" role="status" aria-live="polite"></p>
+
+  <hr style="margin:24px 0;">
+  <h3>Submitted Reviews</h3>
+  <button type="button" id="pr-load-reviews" style="padding:10px 16px;cursor:pointer;">Refresh Reviews</button>
+  <div id="pr-reviews-list" style="margin-top:14px;">Click Refresh Reviews to view saved reviews.</div>
+</section>
+
+<script>
+(function () {
+  const allocationSelect = document.getElementById("pr-allocation");
+  const message = document.getElementById("pr-message");
+  const reviewsList = document.getElementById("pr-reviews-list");
+  
+  const understandingInput = document.getElementById("pr-understanding");
+  const evidenceInput = document.getElementById("pr-evidence");
+  const clarityInput = document.getElementById("pr-clarity");
+  const scoreInput = document.getElementById("pr-score");
+
+  function calculateWeightedScore() {
+    const understanding = understandingInput.value;
+    const evidence = evidenceInput.value;
+    const clarity = clarityInput.value;
+
+    const values = [understanding, evidence, clarity];
+
+    const valid = values.every(function (value) {
+      return value !== "" &&
+        Number.isFinite(Number(value)) &&
+        Number(value) >= 0 &&
+        Number(value) <= 100;
+    });
+
+    if (!valid) {
+      scoreInput.value = "";
+      return;
+    }
+
+    const weightedScore =
+      Number(understanding) * 0.40 +
+      Number(evidence) * 0.35 +
+      Number(clarity) * 0.25;
+
+    scoreInput.value = Math.round(weightedScore);
+  }
+
+  understandingInput.addEventListener("input", calculateWeightedScore);
+  evidenceInput.addEventListener("input", calculateWeightedScore);
+  clarityInput.addEventListener("input", calculateWeightedScore);
+
+  calculateWeightedScore();
+
+
+  function showMessage(text, isError) {
+    message.textContent = text;
+    message.style.color = isError ? "#b42318" : "#18794e";
+  }
+
+  document.getElementById("pr-load-allocations").addEventListener("click", async function () {
+    allocationSelect.innerHTML = '<option value="">Loading...</option>';
+    showMessage("", false);
+
+    try {
+      const response = await fetch("/api/allocations");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not load allocations.");
+
+      allocationSelect.innerHTML = "";
+      const allocations = data.allocations || [];
+
+      if (allocations.length === 0) {
+        allocationSelect.innerHTML = '<option value="">No allocations found</option>';
+        showMessage("No allocations found. Generate and save allocations first.", true);
+        return;
+      }
+
+      allocationSelect.add(new Option("Select a submission to review", ""));
+      allocations.forEach(function (item) {
+        const text = "Allocation " + item.allocation_id +
+          " — " + (item.submission_title || item.submission_id) +
+          " (reviewer: " + (item.reviewer_name || item.reviewer_id) + ")";
+        allocationSelect.add(new Option(text, item.allocation_id));
+      });
+
+      showMessage(allocations.length + " allocations loaded.", false);
+    } catch (error) {
+      allocationSelect.innerHTML = '<option value="">Could not load allocations</option>';
+      showMessage(error.message, true);
+    }
+  });
+
+  document.getElementById("pr-submit").addEventListener("click", async function () {
+    const allocationId = Number(allocationSelect.value);
+    const scoreText = document.getElementById("pr-score").value;
+    const score = Number(scoreText);
+    const feedback = document.getElementById("pr-feedback").value.trim();
+
+    if (!allocationSelect.value) {
+      showMessage("Please load and select an allocation first.", true);
+      return;
+    }
+    if (scoreText === "" || !Number.isInteger(score) || score < 0 || score > 100) {
+      showMessage("Enter a whole-number score between 0 and 100.", true);
+      return;
+    }
+    if (!feedback) {
+      showMessage("Please enter written feedback.", true);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/reviews", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+         allocation_id: Number(allocationSelect.value),
+        score: Number(scoreInput.value),
+        understanding_score: Number(understandingInput.value),
+        evidence_score: Number(evidenceInput.value),
+        clarity_score: Number(clarityInput.value),
+        feedback: document.getElementById("pr-feedback").value.trim()
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Review submission failed.");
+
+      showMessage("Review submitted successfully. Review ID: " + data.review_id, false);
+      document.getElementById("pr-feedback").value = "";
+      await loadReviews();
+    } catch (error) {
+      showMessage(error.message, true);
+    }
+  });
+
+  async function loadReviews() {
+    reviewsList.textContent = "Loading reviews...";
+
+    try {
+      const response = await fetch("/api/reviews");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not load reviews.");
+
+      const reviews = data.reviews || [];
+      if (reviews.length === 0) {
+        reviewsList.textContent = "No reviews submitted yet.";
+        return;
+      }
+
+      const table = document.createElement("table");
+      table.style.width = "100%";
+      table.style.borderCollapse = "collapse";
+
+      const header = table.insertRow();
+      [
+  "Reviewer",
+  "Submission",
+  "Understanding (40%)",
+  "Evidence (35%)",
+  "Clarity (25%)",
+  "Overall Score",
+  "Feedback",
+  "Submitted"].forEach(function (heading) {
+        
+reviews.forEach(function (review) {
+  const row = table.insertRow();
+
+  [
+    review.reviewer_name || review.reviewer_id,
+    review.submission_title || review.submission_id,
+    review.understanding_score ?? "N/A",
+    review.evidence_score ?? "N/A",
+    review.clarity_score ?? "N/A",
+    review.score,
+    review.feedback,
+    review.submitted_at || ""
+  ].forEach(function (value) {
+    const cell = row.insertCell();
+    cell.textContent = value == null ? "" : String(value);
+    cell.style.padding = "9px";
+    cell.style.borderBottom = "1px solid #eee";
+    cell.style.verticalAlign = "top";
+    cell.style.whiteSpace = "normal";
+    cell.style.overflowWrap = "anywhere";
+  });
+});
+
+        const row = table.insertRow();
+        [
+          review.reviewer_name || review.reviewer_id,
+          review.submission_title || review.submission_id,
+          review.score,
+          review.feedback,
+          review.submitted_at || ""
+        ].forEach(function (value) {
+          const cell = row.insertCell();
+          cell.textContent = value == null ? "" : String(value);
+          cell.style.padding = "9px";
+          cell.style.borderBottom = "1px solid #eee";
+        });
+      });
+
+      reviewsList.replaceChildren(table);
+    } catch (error) {
+      reviewsList.textContent = error.message;
+    }
+  }
+
+  document.getElementById("pr-load-reviews").addEventListener("click", loadReviews);
+})();
+</script>
+
