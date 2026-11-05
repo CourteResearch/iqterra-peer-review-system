@@ -102,3 +102,88 @@ def init_db():
             CREATE INDEX idx_review_flags_status ON review_flags(status);
             INSERT INTO schema_migrations(version) VALUES(4);
             """)
+            version = 4
+
+        if version < 5:
+            con.executescript("""
+            CREATE TABLE courses(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                code TEXT NOT NULL DEFAULT '',
+                term TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                is_archived INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0,1)),
+                created_by INTEGER REFERENCES users(id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE course_instructors(
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                instructor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(course_id, instructor_id)
+            );
+            CREATE TABLE course_students(
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                enrolled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(course_id, student_id)
+            );
+            ALTER TABLE assignments ADD COLUMN course_id INTEGER REFERENCES courses(id);
+            CREATE INDEX idx_course_instructors_instructor ON course_instructors(instructor_id);
+            CREATE INDEX idx_course_students_student ON course_students(student_id);
+            CREATE INDEX idx_assignments_course ON assignments(course_id);
+            """)
+            legacy_course_id = con.execute(
+                "INSERT INTO courses(title,code,term,description) VALUES(?,?,?,?)",
+                ("Local course", "DEMO", "Existing demo", "Migrated local demo workspace"),
+            ).lastrowid
+            con.execute(
+                "INSERT INTO course_instructors(course_id,instructor_id) SELECT ?,id FROM users WHERE role='instructor'",
+                (legacy_course_id,),
+            )
+            con.execute(
+                "INSERT INTO course_students(course_id,student_id) SELECT ?,id FROM students",
+                (legacy_course_id,),
+            )
+            con.execute(
+                "UPDATE assignments SET course_id=? WHERE course_id IS NULL",
+                (legacy_course_id,),
+            )
+            con.execute("INSERT INTO schema_migrations(version) VALUES(5)")
+            version = 5
+
+        if version < 6:
+            con.executescript("""
+            CREATE TABLE course_groups(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                is_archived INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0,1)),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(id,course_id),
+                UNIQUE(course_id,name)
+            );
+            CREATE TABLE course_group_members(
+                course_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                student_id TEXT NOT NULL,
+                added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(course_id,student_id),
+                FOREIGN KEY(group_id,course_id) REFERENCES course_groups(id,course_id) ON DELETE CASCADE,
+                FOREIGN KEY(course_id,student_id) REFERENCES course_students(course_id,student_id) ON DELETE CASCADE
+            );
+            ALTER TABLE assignments ADD COLUMN group_mode TEXT NOT NULL DEFAULT 'course'
+                CHECK(group_mode IN ('course','within_group'));
+            CREATE INDEX idx_course_groups_course ON course_groups(course_id,is_archived);
+            CREATE INDEX idx_group_members_group ON course_group_members(group_id);
+            CREATE TRIGGER course_group_membership_requires_active_group
+            BEFORE INSERT ON course_group_members
+            WHEN (SELECT is_archived FROM course_groups WHERE id=NEW.group_id) != 0
+            BEGIN SELECT RAISE(ABORT,'cannot add members to an archived group'); END;
+            INSERT INTO schema_migrations(version) VALUES(6);
+            """)
+            version = 6
+
+        if version < 7:
+            con.execute("INSERT INTO schema_migrations(version) VALUES(7)")
