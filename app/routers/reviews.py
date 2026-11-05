@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from pwdlib import PasswordHash
 import jwt
 from app import database
+from app.course_access import require_assignment_access, require_course_access
 from app.helpers import questions
 from app.allocation import allocate_reviews
 from app.security import (
@@ -24,6 +25,7 @@ from app.schemas import (
     AllocationIn,
     ReviewDraft,
     ModerationIn,
+    RevisionRequest,
     FlagIn,
 )
 
@@ -45,8 +47,16 @@ def review_access(c, rid, u, create=False):
         ).fetchone()
         if not allocation:
             raise HTTPException(404, "Review allocation not found")
+        if not c.execute(
+            "SELECT 1 FROM submissions WHERE id=? AND is_submitted=1",
+            (allocation["submission_id"],),
+        ).fetchone():
+            raise HTTPException(409, "This student has not submitted work for review yet")
         if allocation["reviewer_id"] != u["student_id"]:
             raise HTTPException(403, "Not assigned to this review")
+        require_assignment_access(
+            c, allocation["assignment_id"], u, active=True
+        )
         r = c.execute(
             "SELECT r.*,a.reviewer_id,a.submission_id,a.assignment_id FROM reviews r JOIN allocations a ON a.id=r.allocation_id WHERE a.id=?",
             (rid,),
@@ -67,6 +77,7 @@ def review_access(c, rid, u, create=False):
                 "assignment_id": allocation["assignment_id"],
                 "allocation_id": rid,
             }
+        require_assignment_access(c, r["assignment_id"], u, active=True)
         return r
 
     r = c.execute(
@@ -79,6 +90,11 @@ def review_access(c, rid, u, create=False):
         else None
     )
     if allocation:
+        if not c.execute(
+            "SELECT 1 FROM submissions WHERE id=? AND is_submitted=1",
+            (allocation["submission_id"],),
+        ).fetchone():
+            raise HTTPException(409, "This student has not submitted work for review yet")
         if u["role"] == "student" and u["student_id"] != allocation["reviewer_id"]:
             raise HTTPException(403, "Not assigned to this review")
         r = c.execute(
@@ -92,6 +108,9 @@ def review_access(c, rid, u, create=False):
                 (rid,),
             ).fetchone()
         if not r:
+            require_assignment_access(
+                c, allocation["assignment_id"], u, active=True
+            )
             return {
                 "id": None,
                 "status": "draft",
@@ -105,16 +124,35 @@ def review_access(c, rid, u, create=False):
         raise HTTPException(404, "Review not found")
     if u["role"] == "student" and u["student_id"] != r["reviewer_id"]:
         raise HTTPException(403, "Not assigned to this review")
+    require_assignment_access(
+        c,
+        r["assignment_id"],
+        u,
+        active=(u["role"] == "student"),
+    )
     return r
 
 
 @router.get("/api/my/reviews")
-def my_reviews(u=Depends(student)):
+def my_reviews(course_id: int | None = None, u=Depends(student)):
     with database.get_connection() as c:
-        rows = c.execute(
-            "SELECT a.id allocation_id,a.assignment_id,ass.due_at,s.id submission_id,s.title,s.file_name,COALESCE(r.status,'draft') status,r.id review_id FROM allocations a JOIN assignments ass ON ass.id=a.assignment_id JOIN submissions s ON s.id=a.submission_id LEFT JOIN reviews r ON r.allocation_id=a.id WHERE a.reviewer_id=? ORDER BY a.id",
-            (u["student_id"],),
-        ).fetchall()
+        query = """
+            SELECT a.id allocation_id,a.assignment_id,ass.due_at,s.id submission_id,
+                   s.title,s.file_name,COALESCE(r.status,'draft') status,r.id review_id
+            FROM allocations a JOIN assignments ass ON ass.id=a.assignment_id
+            JOIN courses co ON co.id=ass.course_id
+            JOIN course_students cs ON cs.course_id=co.id AND cs.student_id=a.reviewer_id
+            JOIN submissions s ON s.id=a.submission_id
+            LEFT JOIN reviews r ON r.allocation_id=a.id
+            WHERE a.reviewer_id=? AND co.is_archived=0 AND s.is_submitted=1
+        """
+        args = [u["student_id"]]
+        if course_id is not None:
+            require_course_access(c, course_id, u, active=True)
+            query += " AND ass.course_id=?"
+            args.append(course_id)
+        query += " ORDER BY a.id"
+        rows = c.execute(query, args).fetchall()
         items = []
         for row in rows:
             rid = row["allocation_id"]
@@ -127,6 +165,18 @@ def my_reviews(u=Depends(student)):
                     "title": row["title"],
                     "status": row["status"],
                     "due_at": row["due_at"],
+                    "revision_note": (
+                        c.execute(
+                            """
+                            SELECT detail FROM review_audit
+                            WHERE review_id=? AND action='revision_requested'
+                            ORDER BY id DESC LIMIT 1
+                            """,
+                            (row["review_id"],),
+                        ).fetchone()["detail"]
+                        if row["status"] == "reopened" and row["review_id"]
+                        else None
+                    ),
                     "submission": {
                         "id": row["submission_id"],
                         "title": row["title"],
@@ -157,6 +207,25 @@ def review_get(rid: int, u=Depends(current_user)):
             "id": r["allocation_id"] if u["role"] == "student" else rid,
             "status": r["status"],
             "feedback": r["feedback"],
+            "revision_note": (
+                c.execute(
+                    """
+                    SELECT detail FROM review_audit
+                    WHERE review_id=? AND action='revision_requested'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (rid,),
+                ).fetchone()["detail"]
+                if u["role"] == "student" and r["status"] == "reopened"
+                and c.execute(
+                    """
+                    SELECT 1 FROM review_audit
+                    WHERE review_id=? AND action='revision_requested' LIMIT 1
+                    """,
+                    (rid,),
+                ).fetchone()
+                else None
+            ),
             "answers": answers,
             "submission": {
                 "title": sub["title"],
@@ -169,6 +238,59 @@ def review_get(rid: int, u=Depends(current_user)):
                 ),
             },
         }
+
+
+@router.get("/api/submitted-reviews")
+def submitted_reviews(
+    course_id: int,
+    assignment_id: int | None = None,
+    u=Depends(instructor),
+):
+    with database.get_connection() as c:
+        require_course_access(c, course_id, u)
+        query = """
+            SELECT r.id review_id,r.feedback,r.submitted_at,
+                   a.assignment_id,ass.title assignment_title,
+                   a.reviewer_id,reviewer.display_name reviewer_name,
+                   s.id submission_id,s.student_id author_id,
+                   author.display_name author_name,s.title submission_title,
+                   s.content submission_content,s.file_name,
+                   (SELECT f.reason FROM review_flags f
+                    WHERE f.review_id=r.id AND f.status='open'
+                    ORDER BY f.id DESC LIMIT 1) open_flag_reason
+            FROM reviews r
+            JOIN allocations a ON a.id=r.allocation_id
+            JOIN assignments ass ON ass.id=a.assignment_id
+            JOIN submissions s ON s.id=a.submission_id
+            JOIN students reviewer ON reviewer.id=a.reviewer_id
+            JOIN students author ON author.id=s.student_id
+            WHERE ass.course_id=? AND r.status='submitted'
+        """
+        args = [course_id]
+        if assignment_id is not None:
+            require_assignment_access(c, assignment_id, u)
+            query += " AND a.assignment_id=?"
+            args.append(assignment_id)
+        query += " ORDER BY r.submitted_at DESC,r.id DESC"
+        items = []
+        for row in c.execute(query, args):
+            item = dict(row)
+            item["questions"] = questions(c, row["assignment_id"])
+            item["answers"] = [
+                dict(question_id=answer["question_id"], score=answer["score"])
+                for answer in c.execute(
+                    "SELECT question_id,score FROM review_answers WHERE review_id=?",
+                    (row["review_id"],),
+                )
+            ]
+            item["file_url"] = (
+                f"/api/submissions/{row['submission_id']}/file"
+                if row["file_name"]
+                else None
+            )
+            item["open_flag"] = bool(row["open_flag_reason"])
+            items.append(item)
+        return {"items": items}
 
 
 @router.put("/api/reviews/{rid}")
@@ -259,9 +381,10 @@ def flag(rid: int, x: FlagIn, u=Depends(student)):
 @router.get("/api/moderation")
 def moderation(assignment_id: int | None = None, u=Depends(instructor)):
     with database.get_connection() as c:
-        q = "SELECT f.id,f.review_id,f.reason,f.status,f.created_at,s.title submission_title,s.content submission_content,r.feedback,s.id submission_id,a.assignment_id FROM review_flags f JOIN reviews r ON r.id=f.review_id JOIN allocations a ON a.id=r.allocation_id JOIN submissions s ON s.id=a.submission_id WHERE f.status='open'"
-        args = []
+        q = "SELECT f.id,f.review_id,f.reason,f.status,f.created_at,s.title submission_title,s.content submission_content,r.feedback,s.id submission_id,a.assignment_id FROM review_flags f JOIN reviews r ON r.id=f.review_id JOIN allocations a ON a.id=r.allocation_id JOIN submissions s ON s.id=a.submission_id JOIN assignments ass ON ass.id=a.assignment_id JOIN course_instructors ci ON ci.course_id=ass.course_id WHERE f.status='open' AND ci.instructor_id=?"
+        args = [u["id"]]
         if assignment_id is not None:
+            require_assignment_access(c, assignment_id, u)
             q += " AND a.assignment_id=?"
             args.append(assignment_id)
         items = []
@@ -292,8 +415,13 @@ def moderate(rid: int, x: ModerationIn, u=Depends(instructor)):
     if x.decision not in ("approved", "dismissed"):
         raise HTTPException(422, "Invalid decision")
     with database.transaction(immediate=True) as c:
-        if not c.execute("SELECT 1 FROM reviews WHERE id=?", (rid,)).fetchone():
+        review = c.execute(
+            "SELECT a.assignment_id FROM reviews r JOIN allocations a ON a.id=r.allocation_id WHERE r.id=?",
+            (rid,),
+        ).fetchone()
+        if not review:
             raise HTTPException(404, "Review not found")
+        require_assignment_access(c, review["assignment_id"], u)
         c.execute(
             "INSERT INTO moderation_events(review_id,moderator_id,decision,note) VALUES(?,?,?,?)",
             (rid, u["id"], x.decision, x.note),
@@ -310,18 +438,25 @@ def moderate(rid: int, x: ModerationIn, u=Depends(instructor)):
 
 
 @router.post("/api/reviews/{rid}/reopen")
-def reopen(rid: int, u=Depends(instructor)):
+def reopen(rid: int, x: RevisionRequest, u=Depends(instructor)):
+    note = x.note.strip()
+    if not note:
+        raise HTTPException(422, "A revision request note is required")
     with database.transaction(immediate=True) as c:
-        r = c.execute("SELECT status FROM reviews WHERE id=?", (rid,)).fetchone()
+        r = c.execute(
+            "SELECT r.status,a.assignment_id FROM reviews r JOIN allocations a ON a.id=r.allocation_id WHERE r.id=?",
+            (rid,),
+        ).fetchone()
         if not r:
             raise HTTPException(404, "Review not found")
+        require_assignment_access(c, r["assignment_id"], u, active=True)
         if r["status"] != "submitted":
             raise HTTPException(409, "Only submitted reviews may be reopened")
         c.execute(
             "UPDATE reviews SET status='reopened',submitted_at=NULL WHERE id=?", (rid,)
         )
         c.execute(
-            "INSERT INTO review_audit(review_id,actor_id,action) VALUES(?,?,?)",
-            (rid, u["id"], "reopen"),
+            "INSERT INTO review_audit(review_id,actor_id,action,detail) VALUES(?,?,?,?)",
+            (rid, u["id"], "revision_requested", note),
         )
-    return {"id": rid, "status": "reopened"}
+    return {"id": rid, "status": "reopened", "revision_note": note}

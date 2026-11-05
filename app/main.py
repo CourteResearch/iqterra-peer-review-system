@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import database
 from app.database import init_db
-from app.routers import assignments, auth, exports, misc, overview, reviews, students
+from app.routers import assignments, auth, courses, exports, groups, misc, overview, reviews, students
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
@@ -32,7 +32,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-for module in (auth, students, assignments, reviews, overview, exports, misc):
+for module in (auth, courses, groups, students, assignments, reviews, overview, exports, misc):
     app.include_router(module.router)
 
 

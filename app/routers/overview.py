@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from pwdlib import PasswordHash
 import jwt
 from app import database
+from app.course_access import require_assignment_access
 from app.allocation import allocate_reviews
 from app.security import (
     current_user,
@@ -56,14 +57,11 @@ def assignment(c, r):
 @router.get("/api/overview")
 def overview(assignment_id: int, u=Depends(instructor)):
     with database.get_connection() as c:
-        a = c.execute(
-            "SELECT * FROM assignments WHERE id=?", (assignment_id,)
-        ).fetchone()
-        if not a:
-            raise HTTPException(404, "Assignment not found")
+        a, course = require_assignment_access(c, assignment_id, u)
         students_data = []
         for s in c.execute(
-            "SELECT id,display_name FROM students ORDER BY display_name"
+            "SELECT s.id,s.display_name FROM students s JOIN course_students cs ON cs.student_id=s.id WHERE cs.course_id=? ORDER BY s.display_name",
+            (course["id"],),
         ):
             alloc = c.execute(
                 "SELECT COUNT(*) FROM allocations WHERE assignment_id=? AND reviewer_id=?",
@@ -116,7 +114,10 @@ def overview(assignment_id: int, u=Depends(instructor)):
         return {
             "assignment": assignment(c, a),
             "students": students_data,
-            "total_students": c.execute("SELECT COUNT(*) FROM students").fetchone()[0],
+            "total_students": c.execute(
+                "SELECT COUNT(*) FROM course_students WHERE course_id=?",
+                (course["id"],),
+            ).fetchone()[0],
             "total_reviews": total,
             "completed_reviews": complete,
             "pending_reviews": total - complete,

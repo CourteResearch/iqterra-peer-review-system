@@ -2,7 +2,15 @@
 
 A local-first peer-review application with a React/TypeScript interface and FastAPI/Python backend. The project uses a local SQLite file and keeps the frontend and backend together in this folder: `frontend/` and `app/`.
 
-The workflow supports instructor accounts, assignments with five editable Likert questions, a ten-student synthetic demo cohort, student submissions and anonymous assigned reviews, balanced review allocation, moderation, and local data backup/export. The demo students are fictional; ten is the example cohort size, not a permanent roster limit.
+The workflow supports lecturer-owned course workspaces with co-instructors, course-specific student rosters, named groups/teams, group membership management, course-wide or within-group peer-review allocation, archive/restore for courses and groups, assignments with five editable Likert questions, a ten-student synthetic demo cohort, student submissions and anonymous assigned reviews, balanced review allocation, moderation, and local data backup/export. Course and group archival preserves existing work. Archived courses block new activity; archived groups are excluded from new within-group allocations. The demo students are fictional; ten is the example cohort size, not a permanent roster limit.
+
+Courses, students, and assignments have stable IDs and ID-based read/update/delete API routes. Deleting a student removes only their enrollment from the selected course. Records with dependent submissions, assignments, allocations, or review history are protected from deletion; archive courses or close assignments when history must be retained.
+
+Instructors can generate automatic or manual review allocations from the enrolled course roster before submissions are received. Planned allocations remain hidden from student review lists until the target student submits work; students may submit after allocations are planned, and their submission is locked only after it has actually been submitted and allocated. Within-team assignments require every enrolled student to belong to an active team, and only teammates are eligible reviewers.
+
+Students sign in with their course account and land on **My assignments** for their enrolled course. The assignment list shows due dates and submission status, and students can open instructions, submit text and/or a supported file, and update work until peer reviews are allocated. Closed, overdue, or review-locked submissions remain visible but cannot be edited. The **Reviews to complete** page lists allocated peer work after its author has submitted.
+
+Instructors can inspect submitted peer reviews from **Submitted reviews**, filtered by assignment, including the reviewer, submission author, scores, written feedback, and submitted work. A lecturer can request a revision with an explanation; the request is recorded in the review audit trail, the review returns to the student's queue, and the student sees the note before editing and resubmitting. Student-flagged reviews remain available in the separate **Moderation** queue for approval or dismissal.
 
 ## Important boundaries
 
@@ -88,6 +96,12 @@ Open `http://localhost:8000/`. Docker Compose binds the local `./data` directory
 The synthetic demo contains ten fictional students, one example assignment, five starter Likert prompts, sample text submissions, and a three-review-per-submission allocation where the cohort allows it. Students are assigned only peer work: the server checks for self-review, duplicate assignments, and reciprocal reviewer pairs before saving allocations. The seed command prints each demo account's random initial password once; the instructor can also add separate real roster accounts.
 
 Assignments begin available for the local workflow. Instructors can edit the five prompts before reviews are submitted. Once a review is submitted, the rubric is locked to preserve the meaning of scores. Students can save review drafts and submit each assigned review once. Instructor overview and moderation data come from SQLite, not hard-coded frontend placeholders.
+
+## Courses
+
+Lecturers create a course for each teaching offering and can add existing instructor accounts as co-instructors. Course rosters can include newly created student accounts or existing students; the same student account can be enrolled in multiple courses. Assignments, submissions, allocations, progress summaries, and moderation access are checked against course membership.
+
+The database migration creates a **Local course** for existing data, associates prior assignments and students with it, and gives existing instructor accounts access. Lecturers can create course groups, move enrolled students between groups, and leave learners unassigned. Group deletion is implemented as archive/restore so membership and review history are retained. Assignments default to course-wide review allocation; selecting **Only within each student group** allocates reviews only between students with submissions in the same active group. A group's membership cannot be changed after within-group allocations exist, preserving the allocation's meaning.
 
 ## Data, backups, and download
 

@@ -187,3 +187,65 @@ def init_db():
 
         if version < 7:
             con.execute("INSERT INTO schema_migrations(version) VALUES(7)")
+            version = 7
+
+        if version < 8:
+            con.execute("DROP TRIGGER IF EXISTS allocation_no_reciprocal")
+            has_allocations = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='allocations'"
+            ).fetchone()
+            if has_allocations:
+                con.executescript("""
+            CREATE TRIGGER allocation_no_reciprocal BEFORE INSERT ON allocations
+            WHEN EXISTS(
+                SELECT 1
+                FROM allocations old
+                JOIN submissions old_submission ON old_submission.id=old.submission_id
+                WHERE old.assignment_id=NEW.assignment_id
+                  AND old.reviewer_id=(
+                      SELECT student_id FROM submissions WHERE id=NEW.submission_id
+                  )
+                  AND old_submission.student_id=NEW.reviewer_id
+                  AND (
+                      SELECT COUNT(*)
+                      FROM submissions cohort_submission
+                      JOIN assignments cohort_assignment
+                        ON cohort_assignment.id=cohort_submission.assignment_id
+                      LEFT JOIN course_group_members cohort_member
+                        ON cohort_member.course_id=cohort_assignment.course_id
+                       AND cohort_member.student_id=cohort_submission.student_id
+                      WHERE cohort_submission.assignment_id=NEW.assignment_id
+                        AND (
+                            cohort_assignment.group_mode='course'
+                            OR cohort_member.group_id=(
+                                SELECT target_member.group_id
+                                FROM submissions target_submission
+                                JOIN course_group_members target_member
+                                  ON target_member.course_id=cohort_assignment.course_id
+                                 AND target_member.student_id=target_submission.student_id
+                                WHERE target_submission.id=NEW.submission_id
+                            )
+                        )
+                  ) > 2
+            )
+            BEGIN SELECT RAISE(ABORT,'reciprocal allocation is forbidden'); END;
+            """)
+            con.execute("INSERT INTO schema_migrations(version) VALUES(8)")
+
+        if version < 9:
+            has_submissions = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='submissions'"
+            ).fetchone()
+            if has_submissions:
+                columns = {
+                    row["name"]
+                    for row in con.execute("PRAGMA table_info(submissions)")
+                }
+                if "is_submitted" not in columns:
+                    con.execute(
+                        "ALTER TABLE submissions ADD COLUMN is_submitted INTEGER NOT NULL DEFAULT 1 CHECK(is_submitted IN (0,1))"
+                    )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sub_assignment_submitted ON submissions(assignment_id,is_submitted)"
+                )
+            con.execute("INSERT INTO schema_migrations(version) VALUES(9)")

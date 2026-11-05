@@ -1,7 +1,11 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   api,
+  AllocationOption,
+  AllocationReviewer,
   Assignment,
+  Course,
+  CourseGroup,
   getToken,
   list,
   ModerationItem,
@@ -10,6 +14,7 @@ import {
   Review,
   setToken,
   Submission,
+  SubmittedReview,
   Template,
   User,
   messageOf,
@@ -21,10 +26,13 @@ type Action = <T>(
 ) => Promise<T | undefined>;
 type Screen =
   | "overview"
+  | "courses"
+  | "groups"
   | "assignments"
   | "roster"
   | "allocation"
   | "moderation"
+  | "submitted_reviews"
   | "reviews"
   | "submit";
 const SCALE = [
@@ -67,6 +75,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [assignmentId, setAssignmentId] = useState("");
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
   const signedOut = useCallback(() => {
     setUser(null);
     setToken(null);
@@ -82,6 +92,22 @@ export default function App() {
       .then(setUser)
       .catch(() => signedOut());
   }, [signedOut]);
+  useEffect(() => {
+    if (!user) return;
+    api<{ items: Course[] }>("/courses")
+      .then(({ items }) => {
+        setCourses(items);
+        setSelectedCourseId((current) =>
+          items.some((course) => String(course.id) === current)
+            ? current
+            : String(items[0]?.id || ""),
+        );
+      })
+      .catch((e) => setError(messageOf(e)));
+  }, [user]);
+  useEffect(() => {
+    if (user) setScreen(user.role === "student" ? "submit" : "overview");
+  }, [user]);
   const run = useCallback(
     async <T,>(action: () => Promise<T>, then?: (value: T) => void) => {
       setBusy(true);
@@ -103,6 +129,10 @@ export default function App() {
   if (!user) return <Login onLogin={(u) => setUser(u)} />;
   if (user.must_change_password) return <PasswordChange user={user} onChanged={setUser} onSignOut={signedOut} />;
   const instructor = user.role === "instructor";
+  const selectedCourse = courses.find(
+    (course) => String(course.id) === selectedCourseId,
+  );
+  const courseAvailable = Boolean(selectedCourse && !selectedCourse.is_archived);
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -115,21 +145,46 @@ export default function App() {
         </div>
         <div className="workspace-label">WORKSPACE</div>
         <div className="course-switch">
-          <b>Peer review workspace</b>
-          <small>Local course</small>
+          <label>
+            <span>Current course</span>
+            <select
+              aria-label="Select course"
+              value={selectedCourseId}
+              onChange={(e) => {
+                setSelectedCourseId(e.target.value);
+                setAssignmentId("");
+              }}
+            >
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedCourse && (
+            <small>
+              {[selectedCourse.code, selectedCourse.term]
+                .filter(Boolean)
+                .join(" · ") || "Course workspace"}
+            </small>
+          )}
         </div>
         <nav className="main-nav" aria-label="Workspace navigation">
           {(instructor
             ? [
-                ["overview", "Overview"],
+              ["courses", "Courses"],
+              ["groups", "Groups"],
+              ["overview", "Overview"],
                 ["assignments", "Assignments"],
                 ["roster", "Student roster"],
                 ["allocation", "Allocation"],
+                ["submitted_reviews", "Submitted reviews"],
                 ["moderation", "Moderation"],
               ]
             : [
+                ["submit", "My assignments"],
                 ["reviews", "Reviews to complete"],
-                ["submit", "Submit work"],
               ]
           ).map(([id, label]) => (
             <button
@@ -191,27 +246,75 @@ export default function App() {
           {error && <Notice kind="error">{error}</Notice>}
           {success && <Notice kind="success">{success}</Notice>}
           {busy && <Notice>Loading or saving…</Notice>}
-          {instructor ? (
+          {instructor && screen === "courses" ? (
+            <Courses
+              run={run}
+              courses={courses}
+              onCourses={setCourses}
+              onSuccess={setSuccess}
+              onSelect={(id) => {
+                setSelectedCourseId(id);
+                setScreen("overview");
+                setAssignmentId("");
+              }}
+            />
+          ) : instructor && screen === "groups" && selectedCourse ? (
+            <Groups
+              run={run}
+              courseId={selectedCourseId}
+              onSuccess={setSuccess}
+            />
+          ) : !selectedCourse ? (
+            <section className="panel">
+              <Empty>
+                {instructor
+                  ? "Create a course to start organizing your teaching."
+                  : "You are not enrolled in a course yet. Ask your lecturer to add you."}
+              </Empty>
+            </section>
+          ) : instructor && !courseAvailable ? (
+            <section className="panel">
+              <Notice>This course is archived and read-only.</Notice>
+              <Courses
+                run={run}
+                courses={courses}
+                onCourses={setCourses}
+                onSuccess={setSuccess}
+                onSelect={(id) => {
+                  setSelectedCourseId(id);
+                  setScreen("overview");
+                  setAssignmentId("");
+                }}
+              />
+            </section>
+          ) : instructor ? (
             screen === "overview" ? (
               <Overview
                 run={run}
+                courseId={selectedCourseId}
                 assignmentId={assignmentId}
                 onAssignment={setAssignmentId}
                 onNavigate={setScreen}
               />
             ) : screen === "assignments" ? (
-              <Assignments run={run} onSuccess={setSuccess} />
+              <Assignments run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
             ) : screen === "roster" ? (
-              <Roster run={run} onSuccess={setSuccess} />
+              <Roster run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
             ) : screen === "allocation" ? (
-              <Allocation run={run} onSuccess={setSuccess} />
+              <Allocation run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
+            ) : screen === "submitted_reviews" ? (
+              <SubmittedReviews
+                run={run}
+                courseId={selectedCourseId}
+                onSuccess={setSuccess}
+              />
             ) : (
-              <Moderation run={run} onSuccess={setSuccess} />
+              <Moderation run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
             )
           ) : screen === "submit" ? (
-            <SubmissionForm run={run} onSuccess={setSuccess} />
+            <SubmissionForm run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           ) : (
-            <MyReviews run={run} onSuccess={setSuccess} />
+            <MyReviews run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           )}
         </div>
         <footer className="main-footer">
@@ -227,14 +330,17 @@ function heading(screen: Screen, instructor: boolean) {
     ? (
         {
           overview: "Instructor overview",
+          courses: "Courses",
+          groups: "Course groups",
           assignments: "Assignments",
           roster: "Student roster",
           allocation: "Review allocation",
+          submitted_reviews: "Submitted reviews",
           moderation: "Moderation",
         } as Record<string, string>
       )[screen]
     : screen === "submit"
-      ? "Submit your work"
+      ? "My assignments"
       : "Your peer reviews";
 }
 function PasswordChange({ user, onChanged, onSignOut }: { user: User; onChanged: (u: User) => void; onSignOut: () => void }) {
@@ -331,15 +437,16 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
 }
 function useAssignments(
   run: <T>(a: () => Promise<T>, cb?: (v: T) => void) => Promise<T | undefined>,
+  courseId: string,
 ) {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const refresh = useCallback(
     () =>
       run<Assignment[] | { items?: Assignment[]; results?: Assignment[] }>(
-        () => api("/assignments"),
+        () => api(`/assignments?course_id=${encodeURIComponent(courseId)}`),
         (v) => setAssignments(list(v)),
       ),
-    [run],
+    [courseId, run],
   );
   useEffect(() => {
     void refresh();
@@ -348,16 +455,18 @@ function useAssignments(
 }
 function Overview({
   run,
+  courseId,
   assignmentId,
   onAssignment,
   onNavigate,
 }: {
   run: Action;
+  courseId: string;
   assignmentId: string;
   onAssignment: (v: string) => void;
   onNavigate: (v: Screen) => void;
 }) {
-  const { assignments } = useAssignments(run);
+  const { assignments } = useAssignments(run, courseId);
   const active = assignmentId || String(assignments[0]?.id || "");
   useEffect(() => {
     if (!assignmentId && assignments[0])
@@ -512,19 +621,456 @@ function Metric({ label, value }: { label: string; value?: number }) {
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty-state">{children}</div>;
 }
-function Assignments({
+function Courses({
   run,
+  courses,
+  onCourses,
+  onSelect,
   onSuccess,
 }: {
   run: Action;
+  courses: Course[];
+  onCourses: (courses: Course[]) => void;
+  onSelect: (id: string) => void;
+  onSuccess: (message: string) => void;
+}) {
+  const [allCourses, setAllCourses] = useState<Course[]>([]);
+  const [title, setTitle] = useState("");
+  const [code, setCode] = useState("");
+  const [term, setTerm] = useState("");
+  const [description, setDescription] = useState("");
+  const [instructorUsername, setInstructorUsername] = useState("");
+  const [activeCourseId, setActiveCourseId] = useState("");
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+
+  const refresh = useCallback(
+    () =>
+      run<{ items: Course[] }>(
+        () => api("/courses?include_archived=true"),
+        ({ items }) => setAllCourses(items),
+      ),
+    [run],
+  );
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    const course = await run<Course>(() =>
+      api(editingCourseId ? `/courses/${editingCourseId}` : "/courses", {
+        method: editingCourseId ? "PUT" : "POST",
+        body: JSON.stringify({ title, code, term, description }),
+      }),
+    );
+    if (!course) return;
+    setTitle("");
+    setCode("");
+    setTerm("");
+    setDescription("");
+    setEditingCourseId(null);
+    await refresh();
+    onCourses(editingCourseId
+      ? courses.map((item) => String(item.id) === editingCourseId ? { ...item, ...course } : item)
+      : [...courses, course]);
+    if (!editingCourseId) onSelect(String(course.id));
+    onSuccess(editingCourseId ? "Course updated." : "Course created.");
+  }
+
+  function editCourse(course: Course) {
+    setEditingCourseId(String(course.id));
+    setTitle(course.title);
+    setCode(course.code);
+    setTerm(course.term);
+    setDescription(course.description || "");
+  }
+
+  async function deleteCourse(course: Course) {
+    if (!window.confirm(`Permanently delete empty course "${course.title}"?`)) return;
+    await run(
+      () => api(`/courses/${course.id}`, { method: "DELETE" }),
+      () => {
+        void refresh();
+        onCourses(courses.filter((item) => String(item.id) !== String(course.id)));
+        onSuccess("Course deleted.");
+      },
+    );
+  }
+
+  async function archive(course: Course) {
+    if (!window.confirm(`Archive "${course.title}"? Course records will be preserved.`))
+      return;
+    const result = await run(() =>
+      api(`/courses/${course.id}/archive`, { method: "POST" }),
+    );
+    if (result === undefined) return;
+    await refresh();
+    const active = courses.filter((item) => String(item.id) !== String(course.id));
+    onCourses(active);
+    if (active.length) onSelect(String(active[0].id));
+  }
+
+  async function restore(course: Course) {
+    const result = await run(() =>
+      api(`/courses/${course.id}/restore`, { method: "POST" }),
+    );
+    if (result === undefined) return;
+    await refresh();
+    onCourses([...courses, { ...course, is_archived: false }]);
+  }
+
+  async function addInstructor(e: FormEvent) {
+    e.preventDefault();
+    if (!activeCourseId) return;
+    const result = await run(() =>
+      api(`/courses/${activeCourseId}/instructors`, {
+        method: "POST",
+        body: JSON.stringify({ username: instructorUsername }),
+      }),
+    );
+    if (result !== undefined) setInstructorUsername("");
+  }
+
+  return (
+    <>
+      <section className="panel">
+        <h2>{editingCourseId ? "Edit course" : "Create a course"}</h2>
+        <form className="stack" onSubmit={create}>
+          <label>
+            Course name
+            <input required value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <div className="form-grid">
+            <label>
+              Course code
+              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. 805A" />
+            </label>
+            <label>
+              Teaching period
+              <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="e.g. Semester 1, 2026" />
+            </label>
+          </div>
+          <label>
+            Description
+            <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+          <div className="action-row">
+            <Button>{editingCourseId ? "Save course" : "Create course"}</Button>
+            {editingCourseId && (
+              <Button className="secondary" type="button" onClick={() => {
+                setEditingCourseId(null);
+                setTitle("");
+                setCode("");
+                setTerm("");
+                setDescription("");
+              }}>Cancel</Button>
+            )}
+          </div>
+        </form>
+      </section>
+      <section className="panel">
+        <h2>Your courses</h2>
+        {allCourses.length ? allCourses.map((course) => (
+          <div className="list-row" key={course.id}>
+            <div>
+              <b>{course.title}</b>
+              <small>
+                ID: {course.id} ·{" "}
+                {[course.code, course.term, `${course.student_count ?? 0} students`]
+                  .filter(Boolean).join(" · ")}
+                {course.is_archived ? " · Archived" : ""}
+              </small>
+            </div>
+            <div className="action-row">
+              {!course.is_archived && (
+                <>
+                  <Button className="secondary" onClick={() => onSelect(String(course.id))}>Open course</Button>
+                  <Button className="secondary" onClick={() => editCourse(course)}>Edit</Button>
+                  <Button className="secondary" onClick={() => setActiveCourseId(String(course.id))}>Manage instructors</Button>
+                  <Button className="secondary" onClick={() => void archive(course)}>Archive</Button>
+                  <Button className="secondary" onClick={() => void deleteCourse(course)}>Delete if empty</Button>
+                </>
+              )}
+              {course.is_archived && (
+                <Button className="secondary" onClick={() => void restore(course)}>Restore</Button>
+              )}
+            </div>
+          </div>
+        )) : <Empty>No courses yet. Create one to get started.</Empty>}
+      </section>
+      {activeCourseId && (
+        <section className="panel">
+          <div className="panel-heading">
+            <h2>Share course access</h2>
+            <button className="logout" onClick={() => setActiveCourseId("")}>Close</button>
+          </div>
+          <p className="muted">Add an existing instructor account as a co-instructor for this course.</p>
+          <form className="form-grid" onSubmit={addInstructor}>
+            <label>
+              Instructor username
+              <input required value={instructorUsername} onChange={(e) => setInstructorUsername(e.target.value)} />
+            </label>
+            <Button>Add co-instructor</Button>
+          </form>
+        </section>
+      )}
+    </>
+  );
+}
+function Groups({
+  run,
+  courseId,
+  onSuccess,
+}: {
+  run: Action;
+  courseId: string;
+  onSuccess: (message: string) => void;
+}) {
+  const [groups, setGroups] = useState<CourseGroup[]>([]);
+  const [students, setStudents] = useState<import("./api").Student[]>([]);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<CourseGroup | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+
+  const load = useCallback(
+    () =>
+      run(
+        async () => {
+          const [groupResult, studentResult] = await Promise.all([
+            api<{ items: CourseGroup[] }>(
+              `/groups?course_id=${encodeURIComponent(courseId)}&include_archived=true`,
+            ),
+            api<{ items?: import("./api").Student[]; students?: import("./api").Student[] }>(
+              `/students?course_id=${encodeURIComponent(courseId)}`,
+            ),
+          ]);
+          setGroups(groupResult.items);
+          setStudents(list(studentResult));
+        },
+      ),
+    [courseId, run],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const assignedIds = new Set(
+    groups.flatMap((group) => group.members.map((member) => String(member.id))),
+  );
+  const availableStudents = students.filter(
+    (student) => !assignedIds.has(String(student.id)),
+  );
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    const result = await run(() =>
+      api(`/courses/${courseId}/groups`, {
+        method: "POST",
+        body: JSON.stringify({ name, description }),
+      }),
+    );
+    if (result === undefined) return;
+    setName("");
+    setDescription("");
+    onSuccess("Group created.");
+    void load();
+  }
+
+  async function assign(groupId: string) {
+    const studentId = selections[groupId];
+    if (!studentId) return;
+    const result = await run(() =>
+      api(`/groups/${groupId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ student_id: studentId }),
+      }),
+    );
+    if (result !== undefined) {
+      setSelections((current) => ({ ...current, [groupId]: "" }));
+      onSuccess("Student assigned to group.");
+      void load();
+    }
+  }
+
+  async function removeMember(group: CourseGroup, student: import("./api").Student) {
+    const result = await run(() =>
+      api(`/groups/${group.id}/members/${encodeURIComponent(String(student.id))}`, {
+        method: "DELETE",
+      }),
+    );
+    if (result !== undefined) {
+      onSuccess(`${student.display_name} moved to unassigned students.`);
+      void load();
+    }
+  }
+
+  async function saveGroup(e: FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    const result = await run(() =>
+      api(`/groups/${editing.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: editName, description: editDescription }),
+      }),
+    );
+    if (result !== undefined) {
+      setEditing(null);
+      onSuccess("Group details updated.");
+      void load();
+    }
+  }
+
+  async function archive(group: CourseGroup) {
+    if (!window.confirm(`Archive "${group.name}"? Membership and review history will be preserved.`))
+      return;
+    const result = await run(() =>
+      api(`/groups/${group.id}/archive`, { method: "POST" }),
+    );
+    if (result !== undefined) {
+      onSuccess("Group archived.");
+      void load();
+    }
+  }
+
+  async function restore(group: CourseGroup) {
+    const result = await run(() =>
+      api(`/groups/${group.id}/restore`, { method: "POST" }),
+    );
+    if (result !== undefined) {
+      onSuccess("Group restored.");
+      void load();
+    }
+  }
+
+  return (
+    <>
+      <section className="panel">
+        <h2>Create a group</h2>
+        <p className="muted">
+          Organize enrolled students into teams. Each student can be in one group per course.
+        </p>
+        <form className="stack" onSubmit={create}>
+          <label>
+            Group name
+            <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Team Alpha" />
+          </label>
+          <label>
+            Description (optional)
+            <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+          <Button>Create group</Button>
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Course groups</h2>
+          <span className="status-pill">{groups.filter((group) => !group.is_archived).length} active</span>
+        </div>
+        {groups.length ? groups.map((group) => (
+          <section className="group-card" key={group.id}>
+            <div className="panel-heading">
+              <div>
+                <h3>{group.name}</h3>
+                {group.description && <p className="muted">{group.description}</p>}
+                <small className="muted">{group.members.length} members{group.is_archived ? " · Archived" : ""}</small>
+              </div>
+              <div className="action-row">
+                {!group.is_archived && (
+                  <>
+                    <Button className="secondary" onClick={() => {
+                      setEditing(group);
+                      setEditName(group.name);
+                      setEditDescription(group.description || "");
+                    }}>Edit</Button>
+                    <Button className="secondary" onClick={() => void archive(group)}>Archive</Button>
+                  </>
+                )}
+                {group.is_archived && <Button className="secondary" onClick={() => void restore(group)}>Restore</Button>}
+              </div>
+            </div>
+            {group.members.length ? (
+              <ul className="group-members">
+                {group.members.map((member) => (
+                  <li key={member.id}>
+                    <span><b>{member.display_name}</b><small>{member.username}</small></span>
+                    <Button className="secondary" onClick={() => void removeMember(group, member)}>Unassign</Button>
+                  </li>
+                ))}
+              </ul>
+            ) : <Empty>No students are assigned to this group yet.</Empty>}
+            {!group.is_archived && (
+              <div className="group-assign-row">
+                <label>
+                  Add or move a student
+                  <select
+                    value={selections[String(group.id)] || ""}
+                    onChange={(e) => setSelections((current) => ({ ...current, [String(group.id)]: e.target.value }))}
+                  >
+                    <option value="">Select a student to add or move</option>
+                    {students
+                      .filter((student) => !group.members.some((member) => String(member.id) === String(student.id)))
+                      .map((student) => (
+                      <option key={student.id} value={student.id}>{student.display_name} · {student.username}</option>
+                    ))}
+                  </select>
+                </label>
+                <Button disabled={!selections[String(group.id)]} onClick={() => void assign(String(group.id))}>Assign student</Button>
+              </div>
+            )}
+          </section>
+        )) : <Empty>No groups yet. Create teams above to organize this course.</Empty>}
+      </section>
+
+      <section className="panel">
+        <h2>Unassigned students <span className="muted">({availableStudents.length})</span></h2>
+        {availableStudents.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Student</th><th>Username</th><th>Group status</th></tr></thead>
+              <tbody>{availableStudents.map((student) => (
+                <tr key={student.id}><td>{student.display_name}</td><td>{student.username}</td><td>Not assigned</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : <Empty>Every enrolled student is assigned to a group.</Empty>}
+      </section>
+
+      {editing && (
+        <section className="panel">
+          <h2>Edit {editing.name}</h2>
+          <form className="stack" onSubmit={saveGroup}>
+            <label>Group name<input required value={editName} onChange={(e) => setEditName(e.target.value)} /></label>
+            <label>Description<textarea rows={2} value={editDescription} onChange={(e) => setEditDescription(e.target.value)} /></label>
+            <div className="action-row">
+              <Button>Save changes</Button>
+              <Button className="secondary" onClick={() => setEditing(null)}>Cancel</Button>
+            </div>
+          </form>
+        </section>
+      )}
+    </>
+  );
+}
+function Assignments({
+  run,
+  courseId,
+  onSuccess,
+}: {
+  run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
-  const { assignments, refresh } = useAssignments(run);
+  const { assignments, refresh } = useAssignments(run, courseId);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [editing, setEditing] = useState<Assignment | null>(null);
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
   const [due, setDue] = useState("");
+  const [groupMode, setGroupMode] = useState<"course" | "within_group">("course");
   const [questions, setQuestions] = useState<Question[]>(
     Array.from({ length: 5 }, (_, i) => ({ prompt: "", order: i + 1 })),
   );
@@ -553,6 +1099,7 @@ function Assignments({
     setTitle(a?.title || "");
     setInstructions(a?.instructions || "");
     setDue(a?.due_at?.slice(0, 16) || "");
+    setGroupMode(a?.group_mode || "course");
     setQuestions(
       Array.from({ length: 5 }, (_, i) => ({
         prompt: a?.questions?.[i]?.prompt || templates[i]?.prompt || "",
@@ -566,6 +1113,8 @@ function Assignments({
       title,
       instructions,
       due_at: due ? new Date(due).toISOString() : null,
+      course_id: Number(courseId),
+      group_mode: groupMode,
       questions: questions.map((q) => ({ prompt: q.prompt, order: q.order })),
     };
     const result = await run(() =>
@@ -579,6 +1128,17 @@ function Assignments({
       setEditing(null);
       void refresh();
     }
+  }
+  async function remove(a: Assignment) {
+    if (!window.confirm(`Permanently delete "${a.title}"? Assignments with submissions or review history are protected.`))
+      return;
+    await run(
+      () => api(`/assignments/${a.id}`, { method: "DELETE" }),
+      () => {
+        onSuccess("Assignment deleted.");
+        void refresh();
+      },
+    );
   }
   return (
     <>
@@ -606,6 +1166,23 @@ function Assignments({
               rows={3}
             />
           </label>
+          <label>
+            Peer review groups
+            <select
+              value={groupMode}
+              onChange={(e) =>
+                setGroupMode(e.target.value === "within_group" ? "within_group" : "course")
+              }
+            >
+              <option value="course">Across the whole course</option>
+              <option value="within_group">Only within each student group</option>
+            </select>
+          </label>
+          {groupMode === "within_group" && (
+            <p className="muted">
+              Assign every enrolled student to an active group. Allocations can be planned before submissions; reviews become available when the target student submits.
+            </p>
+          )}
           <label>
             Due date
             <input
@@ -649,13 +1226,17 @@ function Assignments({
               <div>
                 <b>{a.title}</b>
                 <small>
+                  ID: {a.id} ·{" "}
                   {a.due_at
                     ? new Date(a.due_at).toLocaleString()
                     : "No due date"}{" "}
                   · {a.status || "Draft"}
                 </small>
               </div>
-              <Button onClick={() => start(a)}>Edit draft</Button>
+              <div className="action-row">
+                <Button onClick={() => start(a)}>Edit</Button>
+                <Button className="secondary" onClick={() => void remove(a)}>Delete if empty</Button>
+              </div>
             </div>
           ))
         ) : (
@@ -667,23 +1248,28 @@ function Assignments({
 }
 function Roster({
   run,
+  courseId,
   onSuccess,
 }: {
   run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
   const [students, setStudents] = useState<import("./api").Student[]>([]);
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
+  const [existingUsername, setExistingUsername] = useState("");
   const [credential, setCredential] = useState("");
   const [copied, setCopied] = useState(false);
+  const [editingStudent, setEditingStudent] = useState<import("./api").Student | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState("");
   const load = useCallback(
     () =>
       run<any>(
-        () => api("/students"),
+        () => api(`/students?course_id=${encodeURIComponent(courseId)}`),
         (v) => setStudents(list(v)),
       ),
-    [run],
+    [courseId, run],
   );
   useEffect(() => {
     void load();
@@ -691,10 +1277,13 @@ function Roster({
   async function add(e: FormEvent) {
     e.preventDefault();
     const x = await run(() =>
-      api<import("./api").StudentCreated>("/students", {
+      api<import("./api").StudentCreated>(
+        `/students?course_id=${encodeURIComponent(courseId)}`,
+        {
         method: "POST",
         body: JSON.stringify({ display_name: name, username }),
-      }),
+        },
+      ),
     );
     if (x !== undefined) {
       setName("");
@@ -704,6 +1293,52 @@ function Roster({
       onSuccess("Student added. Share the one-time credential privately.");
       void load();
     }
+  }
+  async function enrollExisting(e: FormEvent) {
+    e.preventDefault();
+    const result = await run(() =>
+      api(`/courses/${courseId}/students`, {
+        method: "POST",
+        body: JSON.stringify({ username: existingUsername }),
+      }),
+    );
+    if (result !== undefined) {
+      setExistingUsername("");
+      onSuccess("Existing student enrolled in this course.");
+      void load();
+    }
+  }
+  async function saveStudent(e: FormEvent) {
+    e.preventDefault();
+    if (!editingStudent) return;
+    const result = await run(() =>
+      api(
+        `/students/${encodeURIComponent(String(editingStudent.id))}?course_id=${encodeURIComponent(courseId)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ display_name: editDisplayName }),
+        },
+      ),
+    );
+    if (result !== undefined) {
+      setEditingStudent(null);
+      onSuccess("Student updated.");
+      void load();
+    }
+  }
+  async function removeStudent(student: import("./api").Student) {
+    if (!window.confirm(`Remove ${student.display_name} from this course? Existing submissions and review history are protected.`))
+      return;
+    await run(
+      () => api(
+        `/students/${encodeURIComponent(String(student.id))}?course_id=${encodeURIComponent(courseId)}`,
+        { method: "DELETE" },
+      ),
+      () => {
+        onSuccess("Student removed from this course.");
+        void load();
+      },
+    );
   }
   return (
     <>
@@ -729,7 +1364,36 @@ function Roster({
           <Button>Add student</Button>
         </form>
       </section>
+      <section className="panel">
+        <h2>Enroll an existing student</h2>
+        <form className="form-grid" onSubmit={enrollExisting}>
+          <label>
+            Student username
+            <input required value={existingUsername} onChange={(e) => setExistingUsername(e.target.value)} />
+          </label>
+          <Button>Enroll student</Button>
+        </form>
+      </section>
       {credential && <section className="credential-panel" aria-labelledby="credential-title"><div><h2 id="credential-title">One-time student credential</h2><p>Share this credential privately with the student. It is shown only once and is not stored by this page.</p><code>{credential}</code></div><div className="action-row"><Button onClick={() => { void navigator.clipboard.writeText(credential).then(() => setCopied(true)).catch(() => onSuccess("Select and copy the credential manually; clipboard access was unavailable.")); }}> {copied ? "Copied" : "Copy credential"}</Button><Button className="secondary" onClick={() => setCredential("")}>Dismiss</Button></div></section>}
+      {editingStudent && (
+        <section className="panel">
+          <h2>Edit student · ID {editingStudent.id}</h2>
+          <form className="form-grid" onSubmit={saveStudent}>
+            <label>
+              Display name
+              <input
+                required
+                value={editDisplayName}
+                onChange={(e) => setEditDisplayName(e.target.value)}
+              />
+            </label>
+            <div className="action-row">
+              <Button>Save student</Button>
+              <Button className="secondary" type="button" onClick={() => setEditingStudent(null)}>Cancel</Button>
+            </div>
+          </form>
+        </section>
+      )}
       <section className="panel">
         <h2>
           Roster <span className="muted">({students.length})</span>
@@ -739,15 +1403,27 @@ function Roster({
             <table>
               <thead>
                 <tr>
+                  <th>ID</th>
                   <th>Name</th>
                   <th>Username</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {students.map((s) => (
                   <tr key={s.id}>
+                    <td>{s.id}</td>
                     <td>{s.display_name}</td>
                     <td>{s.username}</td>
+                    <td>
+                      <div className="action-row">
+                        <Button className="secondary" onClick={() => {
+                          setEditingStudent(s);
+                          setEditDisplayName(s.display_name);
+                        }}>Edit</Button>
+                        <Button className="secondary" onClick={() => void removeStudent(s)}>Remove</Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -765,35 +1441,100 @@ function Roster({
 }
 function Allocation({
   run,
+  courseId,
   onSuccess,
 }: {
   run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
-  const { assignments } = useAssignments(run);
+  const { assignments } = useAssignments(run, courseId);
   const [assignmentId, setAssignment] = useState("");
   const [count, setCount] = useState(3);
-  const [items, setItems] = useState<any[]>([]);
+  const [mode, setMode] = useState<"automatic" | "manual">("automatic");
+  const [items, setItems] = useState<{ id: number; reviewer_id: string; submission_id: number }[]>([]);
+  const [submissions, setSubmissions] = useState<AllocationOption[]>([]);
+  const [reviewers, setReviewers] = useState<AllocationReviewer[]>([]);
+  const [manualReviewers, setManualReviewers] = useState<Record<string, string[]>>({});
   const active = assignmentId || String(assignments[0]?.id || "");
+  const selectedAssignment = assignments.find((item) => String(item.id) === active);
   useEffect(() => {
     if (active)
-      void run<any>(
+      void run<{
+        items: typeof items;
+        submissions: AllocationOption[];
+        reviewers: AllocationReviewer[];
+      }>(
         () => api(`/allocations?assignment_id=${encodeURIComponent(active)}`),
-        (v) => setItems(list(v)),
+        (v) => {
+          setItems(v.items || []);
+          setSubmissions(v.submissions || []);
+          setReviewers(v.reviewers || []);
+          setManualReviewers({});
+        },
       );
   }, [active, run]);
+  const eligibleReviewers = (submission: AllocationOption) =>
+    (selectedAssignment?.group_mode === "within_group" ? reviewers : submissions).filter(
+      (candidate) =>
+        candidate.student_id !== submission.student_id &&
+        (selectedAssignment?.group_mode !== "within_group" ||
+          candidate.group_id === submission.group_id),
+    );
+  const manualReady =
+    submissions.length > 0 &&
+    submissions.every(
+      (submission) =>
+        (manualReviewers[String(submission.student_id)] || []).length === count,
+    );
   async function allocate() {
     const r = await run(() =>
       api(`/assignments/${active}/allocations`, {
         method: "POST",
-        body: JSON.stringify({ reviewers_per_submission: count }),
+        body: JSON.stringify({
+          mode,
+          reviewers_per_submission: count,
+          ...(mode === "manual"
+            ? {
+                assignments: submissions.map((submission) => ({
+                  student_id: submission.student_id,
+                  reviewer_ids: manualReviewers[String(submission.student_id)] || [],
+                })),
+              }
+            : {}),
+        }),
       }),
     );
     if (r !== undefined) {
-      onSuccess("Allocation generated.");
-      setItems(list(r as any));
+      onSuccess(mode === "manual" ? "Manual allocation saved." : "Automatic allocation generated.");
+      const result = r as { items: typeof items };
+      setItems(result.items);
+      const current = await run<{
+        submissions: AllocationOption[];
+        reviewers: AllocationReviewer[];
+      }>(() => api(`/allocations?assignment_id=${encodeURIComponent(active)}`));
+      if (current) {
+        setSubmissions(current.submissions);
+        setReviewers(current.reviewers);
+      }
     }
   }
+  function toggleReviewer(targetId: string, reviewerId: string) {
+    const key = targetId;
+    setManualReviewers((current) => {
+      const selected = current[key] || [];
+      const updated = selected.includes(reviewerId)
+        ? selected.filter((id) => id !== reviewerId)
+        : selected.length < count
+          ? [...selected, reviewerId]
+          : selected;
+      return { ...current, [key]: updated };
+    });
+  }
+  const studentName = (studentId: string) =>
+    reviewers.find((reviewer) => reviewer.student_id === studentId)?.student_name ||
+    submissions.find((submission) => submission.student_id === studentId)?.student_name ||
+    studentId;
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -813,18 +1554,76 @@ function Allocation({
         <>
           <div className="action-row">
             <label>
+              Allocation method
+              <select value={mode} onChange={(e) => setMode(e.target.value as "automatic" | "manual")}>
+                <option value="automatic">Automatic (balanced)</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+            <label>
               Reviewers per submission{" "}
               <input
                 type="number"
                 min="1"
                 value={count}
-                onChange={(e) => setCount(Number(e.target.value))}
+                onChange={(e) => {
+                  setCount(Math.max(1, Number(e.target.value) || 1));
+                  setManualReviewers({});
+                }}
               />
             </label>
-            <Button disabled={!active} onClick={allocate}>
-              Generate allocation
+            <Button
+              disabled={!active || items.length > 0 || (mode === "manual" && !manualReady)}
+              onClick={allocate}
+            >
+              {mode === "manual" ? "Save manual allocation" : "Generate allocation"}
             </Button>
           </div>
+          <p className="muted">
+            {selectedAssignment?.group_mode === "within_group"
+              ? "Team mode: each student reviews classmates from their own team only."
+              : "Course mode: students review peers across the whole course."}
+            {" "}Review loads are balanced; self-reviews and reciprocal pairs are not allowed.
+          </p>
+          {mode === "manual" && !items.length && submissions.length > 0 && (
+            <div className="stack">
+              <h3>Choose reviewers for each submission</h3>
+              {submissions.map((submission) => {
+                const eligible = eligibleReviewers(submission);
+                const targetKey = String(submission.student_id);
+                const selected = manualReviewers[targetKey] || [];
+                return (
+                  <fieldset key={submission.student_id} className="panel">
+                    <legend>
+                      {submission.student_name}'s work
+                      {!submission.is_submitted && " (submission pending)"}
+                      {selectedAssignment?.group_mode === "within_group" && submission.group_name
+                        ? ` · ${submission.group_name}`
+                        : ""}
+                    </legend>
+                    {eligible.length ? (
+                      <div className="action-row">
+                        {eligible.map((reviewer) => (
+                          <label key={reviewer.student_id}>
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(reviewer.student_id)}
+                              disabled={!selected.includes(reviewer.student_id) && selected.length >= count}
+                              onChange={() => toggleReviewer(targetKey, reviewer.student_id)}
+                            />
+                            {reviewer.student_name}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">No eligible reviewers. Check group membership and submitted work.</p>
+                    )}
+                    <small>{selected.length} of {count} reviewers selected</small>
+                  </fieldset>
+                );
+              })}
+            </div>
+          )}
           {items.length ? (
             <div className="table-wrap">
               <table>
@@ -838,9 +1637,16 @@ function Allocation({
                 <tbody>
                   {items.map((x, i) => (
                     <tr key={x.id ?? i}>
-                      <td>{x.reviewer_name || x.reviewer || "—"}</td>
-                      <td>{x.submission_title || x.submission_id || "—"}</td>
-                      <td>{x.status || "Allocated"}</td>
+                      <td>{studentName(x.reviewer_id)}</td>
+                      <td>
+                        {submissions.find((submission) => submission.id === x.submission_id)?.student_name || x.submission_id}
+                        {submissions.find((submission) => submission.id === x.submission_id)?.is_submitted ? "" : " (submission pending)"}
+                      </td>
+                      <td>
+                        {submissions.find((submission) => submission.id === x.submission_id)?.is_submitted
+                          ? "Allocated"
+                          : "Waiting for submission"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -856,12 +1662,14 @@ function Allocation({
 }
 function Moderation({
   run,
+  courseId,
   onSuccess,
 }: {
   run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
-  const { assignments } = useAssignments(run);
+  const { assignments } = useAssignments(run, courseId);
   const [aid, setAid] = useState("");
   const [items, setItems] = useState<ModerationItem[]>([]);
   const active = aid || String(assignments[0]?.id || "");
@@ -937,11 +1745,226 @@ function Moderation({
     </section>
   );
 }
-function MyReviews({
+function SubmittedReviews({
   run,
+  courseId,
   onSuccess,
 }: {
   run: Action;
+  courseId: string;
+  onSuccess: (s: string) => void;
+}) {
+  const { assignments } = useAssignments(run, courseId);
+  const [assignmentId, setAssignmentId] = useState("");
+  const [items, setItems] = useState<SubmittedReview[]>([]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [requesting, setRequesting] = useState<string | null>(null);
+  const active =
+    assignmentId === "all"
+      ? ""
+      : assignmentId || String(assignments[0]?.id || "");
+  const load = useCallback(
+    () =>
+      run<{ items?: SubmittedReview[] }>(
+        () =>
+          api(
+            `/submitted-reviews?course_id=${encodeURIComponent(courseId)}${
+              active ? `&assignment_id=${encodeURIComponent(active)}` : ""
+            }`,
+          ),
+        (value) => setItems(list(value)),
+      ),
+    [active, courseId, run],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function requestRevision(item: SubmittedReview) {
+    const note = (notes[String(item.review_id)] || "").trim();
+    if (!note) return;
+    const result = await run(() =>
+      api(`/reviews/${item.review_id}/reopen`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      }),
+    );
+    if (result !== undefined) {
+      setRequesting(null);
+      setNotes((current) => ({ ...current, [String(item.review_id)]: "" }));
+      await load();
+      onSuccess(`Revision requested from ${item.reviewer_name}.`);
+    }
+  }
+
+  async function decideFlag(
+    item: SubmittedReview,
+    decision: "approved" | "dismissed",
+  ) {
+    const note = window.prompt("Optional moderation note:") || "";
+    const result = await run(() =>
+      api(`/reviews/${item.review_id}/moderation`, {
+        method: "POST",
+        body: JSON.stringify({ decision, note }),
+      }),
+    );
+    if (result !== undefined) {
+      await load();
+      onSuccess(`Flag ${decision}.`);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Submitted peer reviews</h2>
+          <p className="muted">
+            Review scores and feedback submitted by students. Authors and reviewers are visible to instructors.
+          </p>
+        </div>
+        <label>
+          Assignment
+          <select
+            aria-label="Filter submitted reviews by assignment"
+            value={assignmentId || active}
+            onChange={(event) => setAssignmentId(event.target.value)}
+          >
+            <option value="all">All assignments</option>
+            {assignments.map((assignment) => (
+              <option key={assignment.id} value={assignment.id}>
+                {assignment.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {items.length ? (
+        items.map((item) => {
+          const reviewId = String(item.review_id);
+          const isRequesting = requesting === reviewId;
+          return (
+            <article className="moderation-card submitted-review-card" key={reviewId}>
+              <div className="panel-heading">
+                <div>
+                  <b>{item.assignment_title}</b>
+                  <small>
+                    Submitted {new Date(item.submitted_at).toLocaleString()}
+                    {item.open_flag ? " · Flagged for moderation" : ""}
+                  </small>
+                </div>
+                <span className="status-pill">Submitted</span>
+              </div>
+              {item.open_flag && (
+                <Notice>
+                  <b>Student flag:</b> {item.open_flag_reason || "No reason provided."}
+                </Notice>
+              )}
+              <p>
+                <b>Reviewer:</b> {item.reviewer_name}
+                {" · "}
+                <b>Work by:</b> {item.author_name}
+              </p>
+              <h3>{item.submission_title}</h3>
+              <div className="submission-content">
+                {item.submission_content || "No text content was provided."}
+                {item.file_url && (
+                  <p>
+                    <a href={item.file_url} target="_blank" rel="noreferrer">
+                      Open submitted attachment
+                    </a>
+                  </p>
+                )}
+              </div>
+              <h3>Assessment scores</h3>
+              {item.questions.map((question) => {
+                const answer = item.answers.find(
+                  (entry) => String(entry.question_id) === String(question.id),
+                );
+                return (
+                  <p className="submitted-review-score" key={String(question.id)}>
+                    {question.prompt}
+                    <b>{answer ? `${answer.score} / 5 · ${SCALE[answer.score - 1]}` : "Not scored"}</b>
+                  </p>
+                );
+              })}
+              <h3>Written feedback</h3>
+              <p className="review-feedback">{item.feedback}</p>
+              {isRequesting ? (
+                <div className="stack revision-request">
+                  <label>
+                    Explain what the student should revise
+                    <textarea
+                      rows={3}
+                      required
+                      maxLength={2000}
+                      value={notes[reviewId] || ""}
+                      onChange={(event) =>
+                        setNotes((current) => ({
+                          ...current,
+                          [reviewId]: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <div className="action-row">
+                    <Button
+                      disabled={!notes[reviewId]?.trim()}
+                      onClick={() => void requestRevision(item)}
+                    >
+                      Send revision request
+                    </Button>
+                    <Button
+                      className="secondary"
+                      onClick={() => setRequesting(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="action-row">
+                  {item.open_flag && (
+                    <>
+                      <Button onClick={() => void decideFlag(item, "approved")}>
+                        Approve flag
+                      </Button>
+                      <Button
+                        className="secondary"
+                        onClick={() => void decideFlag(item, "dismissed")}
+                      >
+                        Dismiss flag
+                      </Button>
+                    </>
+                  )}
+                  <Button
+                    className="secondary"
+                    onClick={() => setRequesting(reviewId)}
+                  >
+                    Request revision
+                  </Button>
+                </div>
+              )}
+            </article>
+          );
+        })
+      ) : (
+        <Empty>
+          {active
+            ? "No reviews have been submitted for this assignment yet."
+            : "No submitted reviews in this course yet."}
+        </Empty>
+      )}
+    </section>
+  );
+}
+function MyReviews({
+  run,
+  courseId,
+  onSuccess,
+}: {
+  run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -949,10 +1972,10 @@ function MyReviews({
   const load = useCallback(
     () =>
       run<any>(
-        () => api("/my/reviews"),
+        () => api(`/my/reviews?course_id=${encodeURIComponent(courseId)}`),
         (v) => setReviews(list(v)),
       ),
-    [run],
+    [courseId, run],
   );
   useEffect(() => {
     void load();
@@ -1108,6 +2131,11 @@ function ReviewEditor({
         )}
       </div>
       <h3>Assessment · five statements</h3>
+      {detail.revision_note && (
+        <Notice>
+          Your lecturer requested a revision: {detail.revision_note}
+        </Notice>
+      )}
       {submitted && (
         <Notice kind="success">
           This review has been submitted and is read-only.
@@ -1178,21 +2206,45 @@ function ReviewEditor({
 }
 function SubmissionForm({
   run,
+  courseId,
   onSuccess,
 }: {
   run: Action;
+  courseId: string;
   onSuccess: (s: string) => void;
 }) {
-  const { assignments } = useAssignments(run);
+  const { assignments, refresh } = useAssignments(run, courseId);
   const [assignmentId, setAid] = useState("");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [validation, setValidation] = useState("");
   const activeAssignmentId = assignmentId || String(assignments[0]?.id || "");
+  const selected = assignments.find(
+    (assignment) => String(assignment.id) === activeAssignmentId,
+  );
+  const submission = selected?.my_submission;
+  const pastDue = Boolean(
+    selected?.due_at && new Date(selected.due_at).getTime() < Date.now(),
+  );
+  const canSubmit = selected?.status === "open" && !pastDue && !submission?.locked;
+
+  useEffect(() => {
+    if (!assignmentId && assignments[0])
+      setAid(String(assignments[0].id));
+  }, [assignmentId, assignments]);
+
+  useEffect(() => {
+    setTitle(submission?.is_submitted ? submission.title : "");
+    setContent(submission?.is_submitted ? submission.content || "" : "");
+    setFile(null);
+    setValidation("");
+  }, [activeAssignmentId, assignments]);
+
   async function send(e: FormEvent) {
     e.preventDefault();
-    if (!content.trim() && !file) { setValidation("Add text or choose a file before submitting."); return; }
+    if (!selected || !canSubmit) return;
+    if (!content.trim() && !file && !submission?.file_url) { setValidation("Add text or choose a file before submitting."); return; }
     setValidation("");
     const form = new FormData();
     form.set("title", title);
@@ -1208,27 +2260,96 @@ function SubmissionForm({
       setTitle("");
       setContent("");
       setFile(null);
-      onSuccess("Submission received.");
+      await refresh();
+      onSuccess(submission?.is_submitted ? "Submission updated." : "Submission received.");
     }
   }
   return (
+    <>
     <section className="panel">
-      <h2>Submit your work</h2>
+      <div className="panel-heading">
+        <h2>Assignments for this course</h2>
+        <span className="status-pill">{assignments.length} total</span>
+      </div>
       {assignments.length ? (
-        <form className="stack" onSubmit={send}>
-          <label>
-            Assignment
-            <select
-              value={activeAssignmentId}
-              onChange={(e) => setAid(e.target.value)}
+        assignments.map((assignment) => {
+          const ownSubmission = assignment.my_submission;
+          const overdue = Boolean(
+            assignment.due_at && new Date(assignment.due_at).getTime() < Date.now(),
+          );
+          const state = ownSubmission?.is_submitted
+            ? "Submitted"
+            : assignment.status !== "open"
+              ? "Closed"
+              : overdue
+                ? "Past due"
+                : "Not submitted";
+          return (
+          <div className="list-row student-assignment" key={assignment.id}>
+            <div>
+              <b>{assignment.title}</b>
+              <small>
+                Due {assignment.due_at
+                  ? new Date(assignment.due_at).toLocaleString()
+                  : "date not set"}
+                {" · "}{state}
+              </small>
+            </div>
+            <Button
+              className="secondary"
+              aria-pressed={activeAssignmentId === String(assignment.id)}
+              onClick={() => setAid(String(assignment.id))}
             >
-              {assignments.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.title}
-                </option>
-              ))}
-            </select>
-          </label>
+              {activeAssignmentId === String(assignment.id) ? "Selected" : "View"}
+            </Button>
+          </div>
+          );
+        })
+      ) : (
+        <Empty>No assignments are available in this course yet. Check with your lecturer if you expect to see one.</Empty>
+      )}
+    </section>
+    {selected && (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>{selected.title}</h2>
+        <span className="status-pill">
+          {submission?.is_submitted ? "Submitted" : canSubmit ? "Open" : "Closed"}
+        </span>
+      </div>
+      {selected.due_at && (
+        <p className="muted">Due {new Date(selected.due_at).toLocaleString()}</p>
+      )}
+      {selected.instructions && (
+        <div className="submission-content">{selected.instructions}</div>
+      )}
+      {submission?.is_submitted && (
+        <Notice kind="success">
+          Your work has been submitted{submission.locked ? " and is locked because peer reviews have been allocated." : "."}
+          {!submission.locked && selected.status === "open" && !pastDue
+            ? " You can update it until reviews are allocated."
+            : ""}
+        </Notice>
+      )}
+      {!canSubmit && !submission?.locked && (
+        <Notice>
+          {selected.status !== "open"
+            ? "This assignment is closed and no longer accepts submissions."
+            : pastDue
+              ? "The due date has passed; this assignment no longer accepts submissions."
+              : "This assignment is not currently accepting submissions."}
+        </Notice>
+      )}
+      {submission?.file_url && (
+        <p>
+          Current attachment:{" "}
+          <a href={submission.file_url} target="_blank" rel="noreferrer">
+            {submission.original_file_name || "View submitted file"}
+          </a>
+        </p>
+      )}
+      <form className="stack" onSubmit={send}>
+        <fieldset disabled={!canSubmit} className="submission-fields">
           <label>
             Submission title
             <input
@@ -1238,7 +2359,7 @@ function SubmissionForm({
             />
           </label>
           <label>
-            Content
+            Your work
             <textarea
               rows={9}
               value={content}
@@ -1246,20 +2367,30 @@ function SubmissionForm({
             />
           </label>
           <label>
-            Optional file
+            Attach a file
             <input
               type="file"
+              accept=".pdf,.txt,.doc,.docx,.png,.jpg,.jpeg"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
           </label>
-          {validation && <Notice kind="error">{validation}</Notice>}
-          <p className="muted">Provide text, a file, or both.</p>
-          <Button>Submit work</Button>
-        </form>
-      ) : (
-        <Empty>No assignments are available for submission.</Empty>
-      )}
+        </fieldset>
+        {submission?.file_url && canSubmit && (
+          <p className="muted">
+            Leave the file field empty to keep your current attachment; selecting a new file replaces it.
+          </p>
+        )}
+        {validation && <Notice kind="error">{validation}</Notice>}
+        {canSubmit && (
+          <>
+            <p className="muted">Submit text, an attachment, or both. Accepted files: PDF, TXT, DOC, DOCX, PNG, JPG (10 MB maximum).</p>
+            <Button>{submission?.is_submitted ? "Update submission" : "Submit work"}</Button>
+          </>
+        )}
+      </form>
     </section>
+    )}
+    </>
   );
 }
 function Backup({ onError }: { onError: (s: string) => void }) {

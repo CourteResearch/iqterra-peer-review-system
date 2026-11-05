@@ -5,6 +5,25 @@ export type User = {
   role: "instructor" | "student";
   must_change_password?: boolean;
 };
+export type Course = {
+  id: number | string;
+  title: string;
+  code: string;
+  term: string;
+  description?: string;
+  is_archived: boolean | number;
+  student_count?: number;
+  instructor_count?: number;
+};
+export type CourseGroup = {
+  id: number | string;
+  course_id: number | string;
+  name: string;
+  description?: string;
+  is_archived: boolean | number;
+  member_count?: number;
+  members: Student[];
+};
 export type Question = { id?: number | string; prompt: string; order: number };
 export type Template = { id?: number | string; prompt: string; title?: string };
 export type Assignment = {
@@ -13,8 +32,27 @@ export type Assignment = {
   instructions?: string;
   due_at?: string | null;
   status?: string;
+  group_mode?: "course" | "within_group";
   questions?: Question[];
+  my_submission?: {
+    id: number | string;
+    title: string;
+    content?: string;
+    is_submitted: boolean;
+    locked: boolean;
+    original_file_name?: string | null;
+    file_url?: string;
+  } | null;
 };
+export type AllocationOption = {
+  id: number | null;
+  student_id: string;
+  student_name: string;
+  group_id: number | null;
+  group_name: string | null;
+  is_submitted: boolean | number;
+};
+export type AllocationReviewer = Omit<AllocationOption, "id">;
 export type Submission = {
   questions?: Question[];
   id: number | string;
@@ -33,6 +71,26 @@ export type Review = {
   due_at?: string;
   answers?: { question_id: number | string; score: number }[];
   feedback?: string;
+  revision_note?: string | null;
+};
+export type SubmittedReview = {
+  review_id: number | string;
+  assignment_id: number | string;
+  assignment_title: string;
+  reviewer_id: string;
+  reviewer_name: string;
+  submission_id: number | string;
+  author_id: string;
+  author_name: string;
+  submission_title: string;
+  submission_content?: string;
+  file_url?: string | null;
+  feedback: string;
+  submitted_at: string;
+  open_flag: boolean;
+  open_flag_reason?: string | null;
+  questions: Question[];
+  answers: { question_id: number | string; score: number }[];
 };
 export type OverviewData = {
   assignment?: Assignment;
