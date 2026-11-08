@@ -1,5 +1,6 @@
 """Versioned SQLite persistence for the standalone peer-review application."""
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -405,3 +406,60 @@ def init_db():
                     BEGIN SELECT RAISE(ABORT,'reciprocal allocation is forbidden'); END;
                 """)
             con.execute("INSERT INTO schema_migrations(version) VALUES(11)")
+            version = 11
+
+        if version < 12:
+            con.execute(
+                """
+                CREATE TABLE question_answer_submissions(
+                    review_id INTEGER NOT NULL,
+                    question_id INTEGER NOT NULL,
+                    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(review_id,question_id),
+                    FOREIGN KEY(review_id,question_id)
+                        REFERENCES question_answers(review_id,question_id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            table_names = {
+                row["name"]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            review_activity_clause = (
+                """
+                  AND NOT EXISTS(
+                    SELECT 1 FROM reviews r
+                    JOIN allocations a ON a.id=r.allocation_id
+                    WHERE a.assignment_id=q.assignment_id
+                  )
+                """
+                if {"reviews", "allocations"} <= table_names
+                else ""
+            )
+            point_questions = con.execute(
+                f"""
+                SELECT q.id,q.assignment_id,q.settings
+                FROM questions q
+                WHERE q.question_type='points'
+                  {review_activity_clause}
+                  AND NOT EXISTS(
+                    SELECT 1 FROM assignment_form_answers fa
+                    WHERE fa.assignment_id=q.assignment_id
+                  )
+                """
+            ).fetchall()
+            for question in point_questions:
+                settings = json.loads(question["settings"])
+                if "points_pool" in settings and settings.get("include_self") is True:
+                    continue
+                settings.pop("points_per_peer", None)
+                settings["points_pool"] = 100
+                settings["include_self"] = True
+                con.execute(
+                    "UPDATE questions SET settings=? WHERE id=?",
+                    (json.dumps(settings), question["id"]),
+                )
+            con.execute("INSERT INTO schema_migrations(version) VALUES(12)")

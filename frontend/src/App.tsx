@@ -16,6 +16,7 @@ import {
   setToken,
   Submission,
   SubmittedReview,
+  StudentFeedback,
   Template,
   User,
   messageOf,
@@ -37,6 +38,7 @@ type Screen =
   | "moderation"
   | "submitted_reviews"
   | "forms"
+  | "feedback"
   | "reviews"
   | "submit";
 const SCALE = [
@@ -68,9 +70,16 @@ function questionResponseText(
   if (value === undefined || value === null) return "Not answered";
   if (question.type === "rubric" || !question.type) {
     const labels = question.settings?.labels || DEFAULT_RUBRIC_LABELS;
-    return typeof value === "number"
-      ? `${value} / ${labels.length} · ${labels[value - 1] || "Rating"}`
-      : String(value);
+    if (typeof value === "number")
+      return `${value} / ${labels.length} · ${labels[value - 1] || "Rating"}`;
+    if (question.settings?.criteria?.length) {
+      const ratings = recordValue(value);
+      return question.settings.criteria.map((criterion) => {
+        const rating = ratings[criterion.id];
+        return `${criterion.name}: ${String(rating)} / ${labels.length} · ${labels[Number(rating) - 1] || "Rating"}`;
+      }).join("; ");
+    }
+    return JSON.stringify(value);
   }
   if (question.type === "contribution")
     return `${String(value)} / 100 equal-share index`;
@@ -86,6 +95,87 @@ function totalPointValue(value: unknown): number {
   return Object.values(recordValue(value)).reduce<number>(
     (sum, point) => sum + (typeof point === "number" ? point : 0),
     0,
+  );
+}
+function hasQuestionResponse(question: Question, value: unknown): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "string") return Boolean(value.trim());
+  if (question.type === "rubric" && question.settings?.criteria?.length) {
+    const ratings = recordValue(value);
+    return question.settings.criteria.every((criterion) => {
+      const rating = ratings[criterion.id];
+      return typeof rating === "number" && rating >= 1 &&
+        rating <= (question.settings?.labels?.length || DEFAULT_RUBRIC_LABELS.length);
+    });
+  }
+  return true;
+}
+function visibilityDescription(
+  visibility?: "instructor_only" | "team_named" | "recipient_anonymous",
+) {
+  if (visibility === "team_named")
+    return "Shared with the recipient (or their team for team-wide questions) and shows who wrote it.";
+  if (visibility === "recipient_anonymous")
+    return "Shared with the recipient (or their team for team-wide questions) without showing the writer's name.";
+  return "Only instructors in this course can see this response.";
+}
+function RubricMatrix({
+  question,
+  value,
+  disabled,
+  onChange,
+}: {
+  question: Pick<Question, "id" | "settings">;
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: Record<string, number>) => void;
+}) {
+  const criteria = question.settings?.criteria || [];
+  const labels = question.settings?.labels || DEFAULT_RUBRIC_LABELS;
+  const ratings: Record<string, number> = Object.fromEntries(
+    Object.entries(recordValue(value)).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number",
+    ),
+  );
+  return (
+    <div className="rubric-matrix-scroll">
+      <table className="rubric-matrix">
+        <thead>
+          <tr>
+            <th>Criteria</th>
+            {labels.map((label, index) => <th key={`${label}-${index}`}>{label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {criteria.map((criterion) => (
+            <tr key={criterion.id}>
+              <th scope="row">
+                <b>{criterion.name}</b>
+                <small>
+                  {typeof ratings[criterion.id] === "number"
+                    ? criterion.descriptions[ratings[criterion.id] - 1] || ""
+                    : ""}
+                </small>
+              </th>
+              {labels.map((label, index) => (
+                <td key={`${criterion.id}-${index}`}>
+                  <label aria-label={`${criterion.name}: ${label}`}>
+                    <input
+                      type="radio"
+                      name={`rubric-${question.id}-${criterion.id}`}
+                      disabled={disabled}
+                      checked={ratings[criterion.id] === index + 1}
+                      onChange={() => onChange({ ...ratings, [criterion.id]: index + 1 })}
+                    />
+                    <span>{index + 1}</span>
+                  </label>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 function Button({
@@ -232,7 +322,8 @@ export default function App() {
                 ["submit", "My assignments"],
                 ["forms", "Contribution & reflection"],
                 ["reviews", "Reviews to complete"],
-              ]
+              ["feedback", "Team feedback"],
+            ]
           ).map(([id, label]) => (
             <button
               key={id}
@@ -369,6 +460,8 @@ export default function App() {
             <SubmissionForm run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           ) : screen === "forms" ? (
             <AssignmentForms run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
+          ) : screen === "feedback" ? (
+            <StudentFeedbackView run={run} courseId={selectedCourseId} />
           ) : (
             <MyReviews run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           )}
@@ -394,11 +487,14 @@ function heading(screen: Screen, instructor: boolean) {
           submitted_reviews: "Submitted reviews",
           moderation: "Moderation",
           forms: "Contribution & reflection",
+          feedback: "Team feedback",
         } as Record<string, string>
       )[screen]
     : screen === "submit"
       ? "My assignments"
-      : "Your peer reviews";
+      : screen === "feedback"
+        ? "Team feedback"
+        : "Your peer reviews";
 }
 function PasswordChange({ user, onChanged, onSignOut }: { user: User; onChanged: (u: User) => void; onSignOut: () => void }) {
   const [current, setCurrent] = useState("");
@@ -1160,7 +1256,7 @@ function Assignments({
           order: i + 1,
           type: "rubric",
           recipient: "peer",
-          settings: { labels: DEFAULT_RUBRIC_LABELS },
+          settings: { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
         })));
       },
     );
@@ -1177,7 +1273,9 @@ function Assignments({
           order: i + 1,
           type: question.type || "rubric",
           recipient: question.recipient || "peer",
-          settings: question.settings || { labels: DEFAULT_RUBRIC_LABELS },
+          settings: question.type === "points"
+            ? { ...question.settings, points_pool: 100, include_self: true }
+            : question.settings || { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
         }))
       : (templates.length ? templates : DEFAULT_RUBRIC_LABELS.map((prompt) => ({ prompt })))
           .map((question, i) => ({
@@ -1185,7 +1283,7 @@ function Assignments({
             order: i + 1,
             type: "rubric",
             recipient: "peer",
-            settings: { labels: DEFAULT_RUBRIC_LABELS },
+            settings: { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
           })));
   }
   function addQuestion() {
@@ -1198,16 +1296,42 @@ function Assignments({
         type,
         recipient: type === "points" ? "peer" : "peer",
         settings: type === "rubric"
-          ? { labels: DEFAULT_RUBRIC_LABELS }
+          ? { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" }
           : type === "points"
-            ? { points_per_peer: 10 }
-            : {},
+            ? { points_pool: 100, include_self: true, details: "" }
+            : { details: "", visibility: "instructor_only" },
       },
     ]);
   }
   function updateQuestion(index: number, patch: Partial<Question>) {
     setQuestions((current) => current.map((question, i) =>
       i === index ? { ...question, ...patch } : question,
+    ));
+  }
+  function updateQuestionSettings(
+    index: number,
+    settings: NonNullable<Question["settings"]>,
+  ) {
+    setQuestions((current) => current.map((question, i) =>
+      i === index
+        ? {
+            ...question,
+            settings: {
+              ...question.settings,
+              ...settings,
+              ...(settings.labels && question.settings?.criteria
+                ? {
+                    criteria: question.settings.criteria.map((criterion) => ({
+                      ...criterion,
+                      descriptions: settings.labels!.map(
+                        (_, levelIndex) => criterion.descriptions[levelIndex] || "",
+                      ),
+                    })),
+                  }
+                : {}),
+            },
+          }
+        : question,
     ));
   }
   function moveQuestion(index: number, offset: -1 | 1) {
@@ -1337,8 +1461,8 @@ function Assignments({
                           settings: nextType === "rubric"
                             ? { labels: DEFAULT_RUBRIC_LABELS }
                             : nextType === "points"
-                              ? { points_per_peer: 10 }
-                              : {},
+                              ? { points_pool: 100, include_self: true, details: "" }
+                              : { details: "", visibility: "instructor_only" },
                         });
                       }}
                     >
@@ -1361,21 +1485,118 @@ function Assignments({
                     </select>
                   </label>
                 </div>
+                <label>
+                  More details or instructions
+                  <textarea
+                    rows={2}
+                    maxLength={4000}
+                    value={q.settings?.details || ""}
+                    onChange={(event) => updateQuestionSettings(i, { details: event.target.value })}
+                  />
+                </label>
+                {(type === "rubric" || type === "text") && (
+                  <label>
+                    Who can see responses?
+                    <select
+                      value={q.settings?.visibility || (recipient === "self" || recipient === "team" ? "team_named" : "instructor_only")}
+                      onChange={(event) => updateQuestionSettings(i, {
+                        visibility: event.target.value as NonNullable<Question["settings"]>["visibility"],
+                      })}
+                    >
+                      <option value="instructor_only">Only instructors</option>
+                      <option value="team_named">The team, with the writer's name</option>
+                      <option value="recipient_anonymous">Recipient sees it anonymously</option>
+                    </select>
+                  </label>
+                )}
                 {type === "rubric" && (
                   <div className="question-options">
                     <div className="panel-heading">
                       <b>Rating choices ({labels.length}; choose 4 or 5)</b>
-                      {labels.length < 5 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: [...labels, `Level ${labels.length + 1}`] } })}>Add choice</Button>}
+                      {labels.length < 5 && <Button className="secondary" type="button" onClick={() => updateQuestionSettings(i, { labels: [...labels, `Level ${labels.length + 1}`] })}>Add choice</Button>}
                     </div>
                     {labels.map((label, labelIndex) => (
                       <div className="question-option" key={labelIndex}>
                         <label>
                           Choice {labelIndex + 1}
-                          <input value={label} maxLength={80} required onChange={(event) => updateQuestion(i, { settings: { labels: labels.map((value, index) => index === labelIndex ? event.target.value : value) } })} />
+                          <input value={label} maxLength={80} required onChange={(event) => updateQuestionSettings(i, { labels: labels.map((value, index) => index === labelIndex ? event.target.value : value) })} />
                         </label>
-                        {labels.length > 4 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: labels.filter((_, index) => index !== labelIndex) } })}>Remove</Button>}
+                        {labels.length > 4 && <Button className="secondary" type="button" onClick={() => updateQuestionSettings(i, { labels: labels.filter((_, index) => index !== labelIndex) })}>Remove</Button>}
                       </div>
                     ))}
+                    <div className="panel-heading">
+                      <b>Rubric criteria</b>
+                      <Button
+                        className="secondary"
+                        type="button"
+                        disabled={(q.settings?.criteria?.length || 0) >= 20}
+                        onClick={() => updateQuestionSettings(i, {
+                          criteria: [
+                            ...(q.settings?.criteria || []),
+                            {
+                              id: `criterion_${Date.now()}`,
+                              name: "",
+                              descriptions: labels.map(() => ""),
+                            },
+                          ],
+                        })}
+                      >
+                        Add criterion
+                      </Button>
+                    </div>
+                    {(q.settings?.criteria || []).map((criterion, criterionIndex) => (
+                      <div className="rubric-criterion-editor" key={criterion.id}>
+                        <div className="question-option">
+                          <label>
+                            Criterion {criterionIndex + 1}
+                            <input
+                              required
+                              maxLength={160}
+                              value={criterion.name}
+                              onChange={(event) => updateQuestionSettings(i, {
+                                criteria: q.settings?.criteria?.map((item, index) => index === criterionIndex
+                                  ? { ...item, name: event.target.value }
+                                  : item),
+                              })}
+                            />
+                          </label>
+                          <Button
+                            className="secondary"
+                            type="button"
+                            onClick={() => updateQuestionSettings(i, {
+                              criteria: q.settings?.criteria?.filter((_, index) => index !== criterionIndex),
+                            })}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                        <div className="rubric-descriptions">
+                          {labels.map((label, labelIndex) => (
+                            <label key={`${criterion.id}-${labelIndex}`}>
+                              {label}
+                              <textarea
+                                rows={2}
+                                maxLength={1000}
+                                value={criterion.descriptions[labelIndex] || ""}
+                                onChange={(event) => updateQuestionSettings(i, {
+                                  criteria: q.settings?.criteria?.map((item, index) => index === criterionIndex
+                                    ? {
+                                        ...item,
+                                        descriptions: labels.map((_, levelIndex) =>
+                                          levelIndex === labelIndex
+                                            ? event.target.value
+                                            : item.descriptions[levelIndex] || "",
+                                        ),
+                                      }
+                                    : item),
+                                })}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <p className="muted">Add criteria to show a matrix. Each row is rated separately, and the optional descriptions explain each performance level.</p>
                   </div>
                 )}
                 {type === "contribution" && (
@@ -1383,11 +1604,7 @@ function Assignments({
                 )}
                 {type === "points" && (
                   <div className="question-options">
-                    <label>
-                      Points per teammate
-                      <input type="number" min={1} max={100} value={q.settings?.points_per_peer ?? 10} onChange={(event) => updateQuestion(i, { settings: { points_per_peer: Number(event.target.value) } })} />
-                    </label>
-                    <p className="muted">Each student distributes this many points per eligible teammate, excluding themselves. The form calculates the required total and requires the points to add up exactly.</p>
+                    <p className="muted">Each student distributes exactly 100 points across every active team member, including themselves. The form requires the total to equal 100.</p>
                   </div>
                 )}
                 {type === "text" && (
@@ -2269,6 +2486,89 @@ function MyReviews({
     </section>
   );
 }
+function StudentFeedbackView({
+  run,
+  courseId,
+}: {
+  run: Action;
+  courseId: string;
+}) {
+  const [items, setItems] = useState<StudentFeedback[]>([]);
+  const load = useCallback(
+    () =>
+      run<{ items?: StudentFeedback[] }>(
+        () => api(`/my/feedback?course_id=${encodeURIComponent(courseId)}`),
+        (response) => setItems(list(response)),
+      ),
+    [courseId, run],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return (
+    <section className="panel">
+      <h2>Feedback shared with you</h2>
+      <p className="muted">
+        Responses appear here only when the lecturer has allowed the recipient or team to view them.
+      </p>
+      {items.length ? (
+        <div className="question-list">
+          {items.map((item, index) => {
+            const question: Question = {
+              id: item.question_id,
+              prompt: item.prompt,
+              order: index + 1,
+              type: item.type,
+              settings: item.settings,
+            };
+            return (
+              <article className="question-card" key={`${item.question_id}-${item.submitted_at}-${index}`}>
+                <div className="panel-heading">
+                  <h3>{item.assignment_title}</h3>
+                  <span className="status-pill">{item.respondent}</span>
+                </div>
+                {item.submission_title && <p className="muted">About: {item.submission_title}</p>}
+                <b>{item.prompt}</b>
+                {item.details && (
+                  <details className="question-details">
+                    <summary>More details</summary>
+                    <p>{item.details}</p>
+                  </details>
+                )}
+                {item.type === "rubric" && item.settings?.criteria?.length ? (
+                  <RubricMatrix
+                    question={question}
+                    value={item.value}
+                    disabled
+                    onChange={() => undefined}
+                  />
+                ) : item.type === "rubric" && typeof item.value === "number" ? (
+                  <p>
+                    {item.value} / {(item.settings?.labels || DEFAULT_RUBRIC_LABELS).length}
+                    {" · "}{(item.settings?.labels || DEFAULT_RUBRIC_LABELS)[item.value - 1]}
+                  </p>
+                ) : item.type === "text" ? (
+                  <p className="feedback-response">{String(item.value)}</p>
+                ) : item.type === "contribution" ? (
+                  <p>{String(item.value)} / 100 equal-share index</p>
+                ) : (
+                  <p>{JSON.stringify(item.value)}</p>
+                )}
+                <small className="muted">
+                  {visibilityDescription(item.visibility)} · {new Date(item.submitted_at).toLocaleString()}
+                </small>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty>
+          No responses have been shared with you yet. Instructors may choose to keep feedback confidential.
+        </Empty>
+      )}
+    </section>
+  );
+}
 function AssignmentForms({
   run,
   courseId,
@@ -2297,7 +2597,9 @@ function AssignmentForms({
                 next[key] = form.value ?? (
                   form.type === "points"
                     ? Object.fromEntries(form.eligible_peers.map((peer) => [peer.id, 0]))
-                    : ""
+                    : form.type === "rubric" && form.settings?.criteria?.length
+                      ? {}
+                      : ""
                 );
               }
             }
@@ -2319,10 +2621,14 @@ function AssignmentForms({
         setValidation((current) => ({ ...current, [key]: `Allocate exactly ${form.points_pool} points before submitting.` }));
         return;
       }
-    } else if (typeof value === "string" && !value.trim()) {
-      setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
-      return;
-    } else if (value === undefined || value === null || value === "") {
+    } else if (!hasQuestionResponse({
+      id: form.id,
+      prompt: form.prompt,
+      order: 1,
+      type: form.type,
+      recipient: form.recipient,
+      settings: form.settings,
+    }, value)) {
       setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
       return;
     }
@@ -2372,6 +2678,15 @@ function AssignmentForms({
                             : "Self reflection"}
                   </span>
                 </div>
+                {form.settings?.details && (
+                  <details className="question-details">
+                    <summary>More details</summary>
+                    <p>{form.settings.details}</p>
+                  </details>
+                )}
+                {form.settings?.visibility && (
+                  <Notice>{visibilityDescription(form.settings.visibility)}</Notice>
+                )}
                 {!form.available && (
                   <Notice>
                     {form.recipient === "team"
@@ -2382,7 +2697,7 @@ function AssignmentForms({
                 {form.type === "points" && form.available && (
                   <>
                     <p className="muted">
-                      Allocate exactly {form.points_pool} points total ({form.settings?.points_per_peer} per teammate). You cannot allocate points to yourself.
+                      Allocate exactly {form.points_pool} points among all {form.scope === "team" ? "team members" : "eligible classmates"}, including yourself.
                     </p>
                     {form.eligible_peers.map((peer) => {
                       const distribution = recordValue(value);
@@ -2412,21 +2727,28 @@ function AssignmentForms({
                   </>
                 )}
                 {form.type === "rubric" && (
-                  <div className="likert">
-                    {(form.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
-                      <label key={label}>
-                        <input
-                          type="radio"
-                          name={`form-${key}`}
-                          disabled={disabled}
-                          checked={value === index + 1}
-                          onChange={() => setValues((current) => ({ ...current, [key]: index + 1 }))}
-                        />
-                        <span>{index + 1}</span>
-                        <small>{label}</small>
-                      </label>
-                    ))}
-                  </div>
+                  form.settings?.criteria?.length
+                    ? <RubricMatrix
+                        question={form}
+                        value={value}
+                        disabled={disabled}
+                        onChange={(next) => setValues((current) => ({ ...current, [key]: next }))}
+                      />
+                    : <div className="likert">
+                        {(form.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                          <label key={label}>
+                            <input
+                              type="radio"
+                              name={`form-${key}`}
+                              disabled={disabled}
+                              checked={value === index + 1}
+                              onChange={() => setValues((current) => ({ ...current, [key]: index + 1 }))}
+                            />
+                            <span>{index + 1}</span>
+                            <small>{label}</small>
+                          </label>
+                        ))}
+                      </div>
                 )}
                 {form.type === "contribution" && (
                   <label>
@@ -2483,12 +2805,14 @@ function ReviewEditor({
   const [feedback, setFeedback] = useState("");
   const [validation, setValidation] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [submittedQuestions, setSubmittedQuestions] = useState<string[]>([]);
   useEffect(() => {
     void run<Review>(
       () => api(`/reviews/${review.id}`),
       (r) => {
         setDetail(r);
         setFeedback(r.feedback || "");
+        setSubmittedQuestions((r.submitted_question_ids || []).map(String));
         const saved: Record<string, unknown> = {};
         if (r.responses?.length) {
           r.responses.forEach((answer) => {
@@ -2531,11 +2855,9 @@ function ReviewEditor({
       return [{ question_id: question.id!, value }];
     });
     if (submit) {
-      const missing = questionsToRate.filter((question) => {
-        const value = answers[String(question.id)];
-        return value === undefined || value === null || value === "" ||
-          (typeof value === "string" && !value.trim());
-      });
+      const missing = questionsToRate.filter(
+        (question) => !hasQuestionResponse(question, answers[String(question.id)]),
+      );
       if (missing.length) {
         setValidation(`Answer each required peer question before submitting (${missing.length} remaining).`);
         return;
@@ -2564,6 +2886,38 @@ function ReviewEditor({
         onBack();
       }
     } else if (saved !== undefined) onSuccess("Draft saved.");
+  }
+  async function saveAnswer(question: Question) {
+    if (
+      submitted ||
+      question.id === undefined ||
+      submittedQuestions.includes(String(question.id))
+    ) return;
+    const value = answers[String(question.id)];
+    if (!hasQuestionResponse(question, value)) {
+      setValidation("Complete this question before saving its answer.");
+      return;
+    }
+    setValidation("");
+    const saved = await run(() =>
+      api(`/reviews/${review.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          answers: [{ question_id: question.id, value }],
+          feedback,
+        }),
+      }),
+    );
+    if (saved === undefined) return;
+    const result = await run(() =>
+      api(`/reviews/${review.id}/answers/${question.id}/submit`, { method: "POST" }),
+    );
+    if (result !== undefined) {
+      setSubmittedQuestions((current) =>
+        current.includes(String(question.id)) ? current : [...current, String(question.id)],
+      );
+      onSuccess("This answer has been submitted. Continue with the remaining questions.");
+    }
   }
   async function flagForInstructor() {
     const reason = window.prompt("What should the instructor review?")?.trim();
@@ -2613,38 +2967,63 @@ function ReviewEditor({
       ) : questionsToRate.map((question) => {
         const type = question.type || "rubric";
         const value = answers[String(question.id)];
+        const questionSubmitted = submittedQuestions.includes(String(question.id));
         return (
           <div className="criterion" key={String(question.id)}>
             <b>{question.prompt}</b>
+            {question.settings?.details && (
+              <details className="question-details">
+                <summary>More details</summary>
+                <p>{question.settings.details}</p>
+              </details>
+            )}
+            {question.settings?.visibility && (
+              <Notice>{visibilityDescription(question.settings.visibility)}</Notice>
+            )}
             {type === "rubric" && (
-              <div className="likert">
-                {(question.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
-                  <label key={label}>
-                    <input
-                      type="radio"
-                      name={`q-${question.id}`}
-                      disabled={submitted}
-                      checked={value === index + 1}
-                      onChange={() => setAnswers((current) => ({ ...current, [String(question.id)]: index + 1 }))}
-                    />
-                    <span>{index + 1}</span>
-                    <small>{label}</small>
-                  </label>
-                ))}
-              </div>
+              question.settings?.criteria?.length
+                ? <RubricMatrix
+                    question={question}
+                    value={value}
+                    disabled={submitted || submittedQuestions.includes(String(question.id))}
+                    onChange={(next) => setAnswers((current) => ({ ...current, [String(question.id)]: next }))}
+                  />
+                : <div className="likert">
+                    {(question.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                      <label key={label}>
+                        <input
+                          type="radio"
+                          name={`q-${question.id}`}
+                          disabled={submitted || questionSubmitted}
+                          checked={value === index + 1}
+                          onChange={() => setAnswers((current) => ({ ...current, [String(question.id)]: index + 1 }))}
+                        />
+                        <span>{index + 1}</span>
+                        <small>{label}</small>
+                      </label>
+                    ))}
+                  </div>
             )}
             {type === "contribution" && (
               <label>
                 Contribution index (100 = equal share; 0–200)
-                <input type="number" min={0} max={200} step={1} disabled={submitted} value={value === undefined ? "" : String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value === "" ? "" : Number(event.target.value) }))} />
+                <input type="number" min={0} max={200} step={1} disabled={submitted || questionSubmitted} value={value === undefined ? "" : String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value === "" ? "" : Number(event.target.value) }))} />
               </label>
             )}
             {type === "text" && (
               <label>
                 Written response
-                <textarea rows={4} maxLength={4000} disabled={submitted} value={typeof value === "string" ? value : ""} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value }))} />
+                <textarea rows={4} maxLength={4000} disabled={submitted || questionSubmitted} value={typeof value === "string" ? value : ""} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value }))} />
               </label>
             )}
+            <Button
+              className="secondary"
+              type="button"
+              disabled={submitted || questionSubmitted}
+              onClick={() => void saveAnswer(question)}
+            >
+              {questionSubmitted ? "Answer submitted" : "Submit this answer"}
+            </Button>
           </div>
         );
       })}
@@ -2678,7 +3057,7 @@ function ReviewEditor({
           disabled={submitted || !questionsToRate.length}
           onClick={() => void save(true)}
         >
-          Submit review
+          Submit all answers
         </Button>
       </div>
     </section>

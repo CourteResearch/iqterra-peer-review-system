@@ -19,10 +19,19 @@ def questions(c, aid):
         (aid,),
     ):
         settings = json.loads(row["settings"])
-        if row["question_type"] == "rubric" and not settings.get("labels"):
-            settings["labels"] = DEFAULT_RUBRIC_LABELS
+        if row["question_type"] == "rubric":
+            settings.setdefault("labels", DEFAULT_RUBRIC_LABELS)
+            settings.setdefault("criteria", [])
+            settings.setdefault("details", "")
+            settings.setdefault("visibility", "instructor_only")
         if row["question_type"] == "points":
-            settings.setdefault("points_per_peer", 10)
+            settings.setdefault("details", "")
+        if row["question_type"] == "text":
+            settings.setdefault("details", "")
+            settings.setdefault(
+                "visibility",
+                "team_named" if row["recipient"] == "self" else "instructor_only",
+            )
         items.append(
             {
                 "id": row["id"],

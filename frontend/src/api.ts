@@ -30,7 +30,16 @@ export type Question = {
   order: number;
   type?: "rubric" | "text" | "contribution" | "points";
   recipient?: "peer" | "self" | "team";
-  settings?: { labels?: string[]; points_per_peer?: number; max_length?: number };
+  settings?: {
+    labels?: string[];
+    criteria?: { id: string; name: string; descriptions: string[] }[];
+    points_per_peer?: number;
+    points_pool?: number;
+    include_self?: boolean;
+    max_length?: number;
+    details?: string;
+    visibility?: "instructor_only" | "team_named" | "recipient_anonymous";
+  };
 };
 export type Template = { id?: number | string; prompt: string; title?: string };
 export type Assignment = {
@@ -80,6 +89,7 @@ export type Review = {
   due_at?: string;
   answers?: { question_id: number | string; score: number }[];
   responses?: { question_id: number | string; value: unknown }[];
+  submitted_question_ids?: (number | string)[];
   feedback?: string;
   revision_note?: string | null;
 };
@@ -119,6 +129,19 @@ export type AssignmentForm = {
   points_pool?: number | null;
   value: unknown;
   submitted_at?: string | null;
+};
+export type StudentFeedback = {
+  assignment_title: string;
+  submission_title?: string | null;
+  question_id: number | string;
+  prompt: string;
+  type: Question["type"];
+  details?: string;
+  settings?: Question["settings"];
+  visibility: "team_named" | "recipient_anonymous";
+  respondent: string;
+  value: unknown;
+  submitted_at: string;
 };
 export type OverviewData = {
   assignment?: Assignment;

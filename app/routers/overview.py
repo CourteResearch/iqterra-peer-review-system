@@ -114,7 +114,23 @@ def overview(assignment_id: int, u=Depends(instructor)):
                         )
                     ]
                 else:
-                    vals = [json.loads(row["answer_json"]) for row in response_rows]
+                    vals = (
+                        [
+                            row["score"]
+                            for row in c.execute(
+                                """
+                                SELECT ra.score FROM review_answers ra
+                                JOIN reviews r ON r.id=ra.review_id
+                                JOIN allocations a ON a.id=r.allocation_id
+                                WHERE a.assignment_id=? AND ra.question_id=?
+                                  AND r.status='submitted'
+                                """,
+                                (assignment_id, q["id"]),
+                            )
+                        ]
+                        if q["question_type"] == "rubric" and settings.get("criteria")
+                        else [json.loads(row["answer_json"]) for row in response_rows]
+                    )
                     response_details = [
                         {
                             "respondent": row["respondent"],
