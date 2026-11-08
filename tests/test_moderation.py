@@ -154,6 +154,233 @@ def test_student_assignment_list_and_submission_status(setup):
     assert own_new["my_submission"]["content"] == "My completed assessment."
 
 
+def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
+    c, _, _, _ = setup
+    instructor = login(c, "teacher", "teacher-password-123")
+    students = {name: login(c, name) for name in ("s1", "s2", "s3")}
+    with database.get_connection() as db:
+        course_id = db.execute(
+            "SELECT course_id FROM assignments LIMIT 1"
+        ).fetchone()["course_id"]
+        group_id = db.execute(
+            "INSERT INTO course_groups(course_id,name) VALUES(?, 'Project team')",
+            (course_id,),
+        ).lastrowid
+        db.executemany(
+            "INSERT INTO course_group_members(course_id,group_id,student_id) VALUES(?,?,?)",
+            [(course_id, group_id, student_id) for student_id in ("s1", "s2", "s3")],
+        )
+
+    questions = [
+        {
+            "prompt": "Rate the quality of the teammate's work.",
+            "order": 1,
+            "type": "rubric",
+            "recipient": "peer",
+            "settings": {"labels": ["Developing", "Capable", "Strong", "Excellent"]},
+        },
+        {
+            "prompt": "What should this teammate start doing?",
+            "order": 2,
+            "type": "text",
+            "recipient": "peer",
+        },
+        {
+            "prompt": "How much did this teammate contribute?",
+            "order": 3,
+            "type": "contribution",
+            "recipient": "peer",
+        },
+        {
+            "prompt": "Distribute team contribution points.",
+            "order": 4,
+            "type": "points",
+            "recipient": "peer",
+            "settings": {"points_per_peer": 10},
+        },
+        {
+            "prompt": "What did you learn from your team?",
+            "order": 5,
+            "type": "text",
+            "recipient": "self",
+        },
+        {
+            "prompt": "How well did the team work together?",
+            "order": 6,
+            "type": "rubric",
+            "recipient": "team",
+            "settings": {"labels": ["Needs work", "Adequate", "Good", "Excellent"]},
+        },
+    ]
+    created = c.post(
+        "/api/assignments",
+        json={
+            "title": "Flexible peer assessment",
+            "course_id": course_id,
+            "due_at": "2099-01-01T00:00:00Z",
+            "group_mode": "within_group",
+            "questions": questions,
+        },
+        headers=instructor,
+    )
+    assert created.status_code == 201, created.text
+    assignment = created.json()
+    assignment_id = assignment["id"]
+    assert [question["type"] for question in assignment["questions"]] == [
+        "rubric", "text", "contribution", "points", "text", "rubric"
+    ]
+    assert assignment["questions"][0]["settings"]["labels"] == [
+        "Developing", "Capable", "Strong", "Excellent"
+    ]
+
+    manual = [
+        {"student_id": "s1", "reviewer_ids": ["s2"]},
+        {"student_id": "s2", "reviewer_ids": ["s3"]},
+        {"student_id": "s3", "reviewer_ids": ["s1"]},
+    ]
+    allocated = c.post(
+        f"/api/assignments/{assignment_id}/allocations",
+        json={"mode": "manual", "reviewers_per_submission": 1, "assignments": manual},
+        headers=instructor,
+    )
+    assert allocated.status_code == 200, allocated.text
+    s1_allocation = next(
+        item["id"] for item in allocated.json()["items"]
+        if item["reviewer_id"] == "s1"
+    )
+    s1_assignment_form = c.get(
+        f"/api/my/assignment-forms?course_id={course_id}&assignment_id={assignment_id}",
+        headers=students["s1"],
+    )
+    assert s1_assignment_form.status_code == 200
+    forms = {item["type"] + ":" + item["recipient"]: item
+             for item in s1_assignment_form.json()["items"]}
+    assert forms["points:peer"]["points_pool"] == 20
+    points_question_id = forms["points:peer"]["id"]
+    self_question_id = forms["text:self"]["id"]
+    team_question_id = forms["rubric:team"]["id"]
+
+    bad_points = c.put(
+        f"/api/my/assignment-forms/{points_question_id}",
+        json={"value": {"s2": 9, "s3": 10}},
+        headers=students["s1"],
+    )
+    assert bad_points.status_code == 422
+    good_points = c.put(
+        f"/api/my/assignment-forms/{points_question_id}",
+        json={"value": {"s2": 10, "s3": 10}},
+        headers=students["s1"],
+    )
+    assert good_points.status_code == 200
+    assert c.put(
+        f"/api/my/assignment-forms/{self_question_id}",
+        json={"value": "I learned to break down project tasks."},
+        headers=students["s1"],
+    ).status_code == 200
+    assert c.put(
+        f"/api/my/assignment-forms/{team_question_id}",
+        json={"value": 3},
+        headers=students["s1"],
+    ).status_code == 200
+    team_seen = c.get(
+        f"/api/my/assignment-forms?course_id={course_id}&assignment_id={assignment_id}",
+        headers=students["s2"],
+    ).json()["items"]
+    shared_team_answer = next(item for item in team_seen if item["id"] == team_question_id)
+    assert shared_team_answer["value"] == 3
+    assert shared_team_answer["submitted_at"]
+    assert c.put(
+        f"/api/my/assignment-forms/{team_question_id}",
+        json={"value": 4},
+        headers=students["s2"],
+    ).status_code == 409
+
+    submission = c.post(
+        f"/api/assignments/{assignment_id}/submissions",
+        data={"title": "Team member work", "content": "The project implementation and report."},
+        headers=students["s3"],
+    )
+    assert submission.status_code == 200
+    saved = c.put(
+        f"/api/reviews/{s1_allocation}",
+        json={
+            "answers": [
+                {"question_id": assignment["questions"][0]["id"], "value": 4},
+                {"question_id": assignment["questions"][1]["id"], "value": "Start sharing progress earlier."},
+                {"question_id": assignment["questions"][2]["id"], "value": 125},
+            ],
+        },
+        headers=students["s1"],
+    )
+    assert saved.status_code == 200, saved.text
+    assert c.post(
+        f"/api/reviews/{s1_allocation}/submit", headers=students["s1"]
+    ).status_code == 200
+    detail = c.get(
+        f"/api/reviews/{s1_allocation}", headers=students["s1"]
+    ).json()
+    values = {item["question_id"]: item["value"] for item in detail["responses"]}
+    assert values[assignment["questions"][0]["id"]] == 4
+    assert values[assignment["questions"][1]["id"]] == "Start sharing progress earlier."
+    assert values[assignment["questions"][2]["id"]] == 125
+    outcomes = c.get(
+        f"/api/overview?assignment_id={assignment_id}", headers=instructor
+    )
+    assert outcomes.status_code == 200
+    outcomes_by_id = {
+        item["question_id"]: item for item in outcomes.json()["question_outcomes"]
+    }
+    assert outcomes_by_id[assignment["questions"][1]["id"]]["response_details"][0][
+        "value"
+    ] == "Start sharing progress earlier."
+    assert outcomes_by_id[points_question_id]["response_details"][0]["value"] == {
+        "s2": 10,
+        "s3": 10,
+    }
+    assert outcomes_by_id[self_question_id]["response_details"][0]["value"] == (
+        "I learned to break down project tasks."
+    )
+    assert outcomes_by_id[team_question_id]["response_details"][0]["respondent"] == (
+        "Project team"
+    )
+
+    with database.get_connection() as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM question_answers"
+        ).fetchone()[0] == 3
+
+
+def test_question_answer_migration_preserves_existing_ratings(setup):
+    c, aid, allocation, _ = setup
+    with database.get_connection() as db:
+        question_id = db.execute(
+            "SELECT id FROM questions WHERE assignment_id=? ORDER BY question_order LIMIT 1",
+            (aid,),
+        ).fetchone()["id"]
+        review_id = db.execute(
+            "INSERT INTO reviews(allocation_id) VALUES(?)",
+            (allocation,),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO review_answers(review_id,question_id,score) VALUES(?,?,4)",
+            (review_id, question_id),
+        )
+        db.execute("DELETE FROM schema_migrations WHERE version IN (10,11)")
+        db.execute("DROP TABLE question_answers")
+        db.execute("DROP TABLE assignment_form_answers")
+
+    database.init_db()
+    with database.get_connection() as db:
+        migrated = db.execute(
+            """
+            SELECT answer_json FROM question_answers
+            WHERE review_id=? AND question_id=?
+            """,
+            (review_id, question_id),
+        ).fetchone()
+    assert migrated["answer_json"] == "4"
+
+
 def test_course_student_and_assignment_crud_preserve_ids_and_history(setup):
     c, aid, _, _ = setup
     ih = login(c, "teacher", "teacher-password-123")
@@ -641,7 +868,11 @@ def test_allocations_can_be_planned_before_submissions(setup):
     assert all(not submission["is_submitted"] for submission in details["submissions"])
 
     reviewer_headers = login(c, "s2")
-    assert c.get("/api/my/reviews", headers=reviewer_headers).json()["items"] == []
+    waiting = c.get("/api/my/reviews", headers=reviewer_headers).json()["items"]
+    assert len(waiting) == 1
+    assert waiting[0]["status"] == "waiting_submission"
+    assert waiting[0]["submission_ready"] is False
+    assert waiting[0]["submission"]["title"] == "Peer submission pending"
     submitted = c.post(
         f"/api/assignments/{assignment['id']}/submissions",
         data={"title": "Student one work", "content": "Submitted after allocation"},
@@ -1098,6 +1329,91 @@ def test_within_group_uses_all_teammates_as_reviewers(setup):
     )
     assert response.status_code == 200
     assert len(response.json()["items"]) == 5
+
+
+def test_three_person_team_can_assign_every_teammate_to_review(setup):
+    c, _, _, _ = setup
+    ih = login(c, "teacher", "teacher-password-123")
+    course_id = c.get("/api/courses", headers=ih).json()["items"][0]["id"]
+    team = c.post(
+        f"/api/courses/{course_id}/groups",
+        json={"name": "Three-person review team"},
+        headers=ih,
+    ).json()
+    for student_id in ("s1", "s2", "s3"):
+        assert c.post(
+            f"/api/groups/{team['id']}/members",
+            json={"student_id": student_id},
+            headers=ih,
+        ).status_code == 201
+
+    def create_team_assignment(title):
+        response = c.post(
+            "/api/assignments",
+            json={
+                "title": title,
+                "course_id": course_id,
+                "group_mode": "within_group",
+                "due_at": "2099-01-01T00:00:00Z",
+                "questions": [{"prompt": "Assess the work."}],
+            },
+            headers=ih,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["id"]
+
+    automatic_assignment = create_team_assignment("Automatic teammate review")
+    automatic = c.post(
+        f"/api/assignments/{automatic_assignment}/allocations",
+        json={"mode": "automatic", "reviewers_per_submission": 2},
+        headers=ih,
+    )
+    assert automatic.status_code == 200, automatic.text
+    automatic_pairs = {
+        (
+            item["reviewer_id"],
+            item["submission_id"],
+        )
+        for item in automatic.json()["items"]
+    }
+    assert len(automatic_pairs) == 6
+    with database.get_connection() as db:
+        owner_by_submission = {
+            row["id"]: row["student_id"]
+            for row in db.execute(
+                "SELECT id,student_id FROM submissions WHERE assignment_id=?",
+                (automatic_assignment,),
+            )
+        }
+    assert all(
+        reviewer != owner_by_submission[submission_id]
+        for reviewer, submission_id in automatic_pairs
+    )
+    for student_id in ("s1", "s2", "s3"):
+        own_submission = next(
+            submission_id for submission_id, owner in owner_by_submission.items()
+            if owner == student_id
+        )
+        assert {
+            reviewer for reviewer, target in automatic_pairs if target == own_submission
+        } == {"s1", "s2", "s3"} - {student_id}
+
+    manual_assignment = create_team_assignment("Manual teammate review")
+    manual = c.post(
+        f"/api/assignments/{manual_assignment}/allocations",
+        json={
+            "mode": "manual",
+            "reviewers_per_submission": 2,
+            "assignments": [
+                {"student_id": "s1", "reviewer_ids": ["s2", "s3"]},
+                {"student_id": "s2", "reviewer_ids": ["s1", "s3"]},
+                {"student_id": "s3", "reviewer_ids": ["s1", "s2"]},
+            ],
+        },
+        headers=ih,
+    )
+    assert manual.status_code == 200, manual.text
+    assert len(manual.json()["items"]) == 6
 
 
 def test_within_group_allocation_requires_group_memberships(setup):

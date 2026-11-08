@@ -45,13 +45,21 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
+class QuestionIn(BaseModel):
+    prompt: str = Field(min_length=1, max_length=500)
+    order: int = Field(default=1, ge=1, le=30)
+    type: Literal["rubric", "text", "contribution", "points"] = "rubric"
+    recipient: Literal["peer", "self", "team"] = "peer"
+    settings: dict = Field(default_factory=dict)
+
+
 class AssignmentIn(BaseModel):
-    title: str
-    instructions: str = ""
+    title: str = Field(min_length=1, max_length=200)
+    instructions: str = Field(default="", max_length=5000)
     due_at: str
     course_id: int | None = None
     group_mode: Literal["course", "within_group"] = "course"
-    questions: list[dict] | None = None
+    questions: list[QuestionIn] | None = Field(default=None, min_length=1, max_length=30)
 
 
 class ManualAllocationIn(BaseModel):
@@ -68,7 +76,11 @@ class AllocationIn(BaseModel):
 
 class ReviewDraft(BaseModel):
     answers: list[dict] = Field(default_factory=list)
-    feedback: str = ""
+    feedback: str = Field(default="", max_length=5000)
+
+
+class AssignmentFormAnswer(BaseModel):
+    value: object
 
 
 class ModerationIn(BaseModel):

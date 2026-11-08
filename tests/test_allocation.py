@@ -91,3 +91,18 @@ def test_group_allocation_rejects_missing_teammate_reviewers():
         assert "enough other group members" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_three_person_group_can_have_each_teammate_review_every_other():
+    allocations = allocate_group_reviews(
+        ["s1", "s2", "s3"],
+        [("s1", 101), ("s2", 102), ("s3", 103)],
+        2,
+    )
+    assert len(allocations) == 6
+    for student_id, submission_id in (("s1", 101), ("s2", 102), ("s3", 103)):
+        reviewers = {
+            reviewer for reviewer, submission in allocations
+            if submission == submission_id
+        }
+        assert reviewers == {"s1", "s2", "s3"} - {student_id}

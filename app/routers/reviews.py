@@ -1,4 +1,5 @@
 import os, secrets, tempfile, zipfile, shutil
+import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -8,6 +9,7 @@ import jwt
 from app import database
 from app.course_access import require_assignment_access, require_course_access
 from app.helpers import questions
+from app.question_logic import validate_answer
 from app.allocation import allocate_reviews
 from app.security import (
     current_user,
@@ -133,18 +135,40 @@ def review_access(c, rid, u, create=False):
     return r
 
 
+def review_responses(c, review_id):
+    return [
+        {
+            "question_id": row["question_id"],
+            "value": json.loads(row["answer_json"]),
+        }
+        for row in c.execute(
+            "SELECT question_id,answer_json FROM question_answers WHERE review_id=?",
+            (review_id,),
+        )
+    ]
+
+
 @router.get("/api/my/reviews")
 def my_reviews(course_id: int | None = None, u=Depends(student)):
     with database.get_connection() as c:
         query = """
-            SELECT a.id allocation_id,a.assignment_id,ass.due_at,s.id submission_id,
-                   s.title,s.file_name,COALESCE(r.status,'draft') status,r.id review_id
+            SELECT a.id allocation_id,a.assignment_id,ass.title assignment_title,
+                   ass.due_at,s.id submission_id,
+                   CASE WHEN COALESCE(s.is_submitted,1)=1
+                        THEN s.title ELSE NULL END title,
+                   CASE WHEN COALESCE(s.is_submitted,1)=1
+                        THEN s.file_name ELSE NULL END file_name,
+                   COALESCE(s.is_submitted,1) submission_ready,
+                   CASE WHEN COALESCE(s.is_submitted,1)=0
+                        THEN 'waiting_submission'
+                        ELSE COALESCE(r.status,'draft') END status,
+                   r.id review_id
             FROM allocations a JOIN assignments ass ON ass.id=a.assignment_id
             JOIN courses co ON co.id=ass.course_id
             JOIN course_students cs ON cs.course_id=co.id AND cs.student_id=a.reviewer_id
             JOIN submissions s ON s.id=a.submission_id
             LEFT JOIN reviews r ON r.allocation_id=a.id
-            WHERE a.reviewer_id=? AND co.is_archived=0 AND s.is_submitted=1
+            WHERE a.reviewer_id=? AND co.is_archived=0
         """
         args = [u["student_id"]]
         if course_id is not None:
@@ -161,8 +185,10 @@ def my_reviews(course_id: int | None = None, u=Depends(student)):
                     "id": rid,
                     "allocation_id": row["allocation_id"],
                     "assignment_id": row["assignment_id"],
+                    "assignment_title": row["assignment_title"],
                     "submission_id": row["submission_id"],
                     "title": row["title"],
+                    "submission_ready": bool(row["submission_ready"]),
                     "status": row["status"],
                     "due_at": row["due_at"],
                     "revision_note": (
@@ -179,7 +205,7 @@ def my_reviews(course_id: int | None = None, u=Depends(student)):
                     ),
                     "submission": {
                         "id": row["submission_id"],
-                        "title": row["title"],
+                        "title": row["title"] or "Peer submission pending",
                         **(
                             {"file_url": f"/api/submissions/{row['submission_id']}/file"}
                             if row["file_name"]
@@ -203,6 +229,7 @@ def review_get(rid: int, u=Depends(current_user)):
             dict(question_id=z["question_id"], score=z["score"])
             for z in c.execute("SELECT * FROM review_answers WHERE review_id=?", (rid,))
         ]
+        responses = review_responses(c, rid)
         return {
             "id": r["allocation_id"] if u["role"] == "student" else rid,
             "status": r["status"],
@@ -227,6 +254,7 @@ def review_get(rid: int, u=Depends(current_user)):
                 else None
             ),
             "answers": answers,
+            "responses": responses,
             "submission": {
                 "title": sub["title"],
                 "content": sub["content"],
@@ -275,7 +303,11 @@ def submitted_reviews(
         items = []
         for row in c.execute(query, args):
             item = dict(row)
-            item["questions"] = questions(c, row["assignment_id"])
+            item["questions"] = [
+                question
+                for question in questions(c, row["assignment_id"])
+                if question["recipient"] == "peer" and question["type"] != "points"
+            ]
             item["answers"] = [
                 dict(question_id=answer["question_id"], score=answer["score"])
                 for answer in c.execute(
@@ -283,6 +315,7 @@ def submitted_reviews(
                     (row["review_id"],),
                 )
             ]
+            item["responses"] = review_responses(c, row["review_id"])
             item["file_url"] = (
                 f"/api/submissions/{row['submission_id']}/file"
                 if row["file_name"]
@@ -313,20 +346,51 @@ def review_put(rid: int, x: ReviewDraft, u=Depends(student)):
         if len(qids) != len(set(qids)):
             raise HTTPException(422, "Duplicate question IDs")
         allowed = {
-            z[0]
-            for z in c.execute(
-                "SELECT id FROM questions WHERE assignment_id=?", (r["assignment_id"],)
+            question["id"]: question
+            for question in c.execute(
+                """
+                SELECT * FROM questions
+                WHERE assignment_id=? AND recipient='peer' AND question_type<>'points'
+                """,
+                (r["assignment_id"],),
             )
         }
         for a in x.answers:
-            if int(a["question_id"]) not in allowed:
-                raise HTTPException(422, "Question does not belong to assigned rubric")
-            if int(a["score"]) not in range(1, 6):
-                raise HTTPException(422, "Scores must be 1–5")
+            question_id = int(a["question_id"])
+            question = allowed.get(question_id)
+            if not question:
+                raise HTTPException(422, "Question is not part of this peer review")
+            if "value" in a:
+                value = a["value"]
+            elif "score" in a:
+                value = a["score"]
+            else:
+                raise HTTPException(422, "A response value is required")
+            value = validate_answer(question, value)
             c.execute(
-                "INSERT INTO review_answers(review_id,question_id,score) VALUES(?,?,?) ON CONFLICT(review_id,question_id) DO UPDATE SET score=excluded.score",
-                (rid, a["question_id"], a["score"]),
+                """
+                INSERT INTO question_answers(review_id,question_id,answer_json)
+                VALUES(?,?,?)
+                ON CONFLICT(review_id,question_id)
+                DO UPDATE SET answer_json=excluded.answer_json
+                """,
+                (rid, question_id, json.dumps(value)),
             )
+            if question["question_type"] == "rubric" and 1 <= value <= 5:
+                c.execute(
+                    """
+                    INSERT INTO review_answers(review_id,question_id,score)
+                    VALUES(?,?,?)
+                    ON CONFLICT(review_id,question_id)
+                    DO UPDATE SET score=excluded.score
+                    """,
+                    (rid, question_id, value),
+                )
+            else:
+                c.execute(
+                    "DELETE FROM review_answers WHERE review_id=? AND question_id=?",
+                    (rid, question_id),
+                )
     return {"id": rid, "status": "draft"}
 
 
@@ -342,17 +406,50 @@ def review_submit(rid: int, u=Depends(student)):
         )
         if r["status"] == "submitted":
             raise HTTPException(409, "Already submitted")
-        q = c.execute(
-            "SELECT COUNT(*) FROM questions WHERE assignment_id=?",
+        required_questions = c.execute(
+            """
+            SELECT COUNT(*) FROM questions
+            WHERE assignment_id=? AND recipient='peer' AND question_type<>'points'
+            """,
             (r["assignment_id"],),
         ).fetchone()[0]
-        n = c.execute(
-            "SELECT COUNT(*) FROM review_answers ra JOIN questions q ON q.id=ra.question_id WHERE ra.review_id=? AND q.assignment_id=?",
+        answered_questions = c.execute(
+            """
+            SELECT COUNT(*) FROM question_answers qa
+            JOIN questions q ON q.id=qa.question_id
+            WHERE qa.review_id=? AND q.assignment_id=?
+              AND q.recipient='peer' AND q.question_type<>'points'
+            """,
             (rid, r["assignment_id"]),
         ).fetchone()[0]
-        if q != 5 or n != 5 or len(r["feedback"].strip()) < 10:
+        unanswered_points = c.execute(
+            """
+            SELECT q.id FROM questions q
+            WHERE q.assignment_id=? AND q.question_type='points' AND q.recipient='peer'
+              AND NOT EXISTS(
+                SELECT 1 FROM assignment_form_answers fa
+                WHERE fa.question_id=q.id AND fa.recipient_key=?
+              ) LIMIT 1
+            """,
+            (r["assignment_id"], f"student:{r['reviewer_id']}"),
+        ).fetchone()
+        has_written_question = c.execute(
+            """
+            SELECT 1 FROM questions
+            WHERE assignment_id=? AND recipient='peer' AND question_type='text'
+            LIMIT 1
+            """,
+            (r["assignment_id"],),
+        ).fetchone()
+        if (
+            required_questions < 1
+            or answered_questions != required_questions
+            or (not has_written_question and len(r["feedback"].strip()) < 10)
+            or unanswered_points
+        ):
             raise HTTPException(
-                422, "All five scores and at least 10 feedback characters are required"
+                422,
+                "Complete every peer question, required point distribution, and written feedback before submitting",
             )
         c.execute(
             "UPDATE reviews SET status='submitted',submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -398,7 +495,11 @@ def moderation(assignment_id: int | None = None, u=Depends(instructor)):
                 ).fetchone()[0]
                 else None
             )
-            item["questions"] = questions(c, item["assignment_id"])
+            item["questions"] = [
+                question
+                for question in questions(c, item["assignment_id"])
+                if question["recipient"] == "peer" and question["type"] != "points"
+            ]
             item["answers"] = [
                 dict(question_id=a["question_id"], score=a["score"])
                 for a in c.execute(
@@ -406,6 +507,7 @@ def moderation(assignment_id: int | None = None, u=Depends(instructor)):
                     (item["review_id"],),
                 )
             ]
+            item["responses"] = review_responses(c, item["review_id"])
             items.append(item)
         return {"items": items}
 

@@ -1,4 +1,4 @@
-import os, secrets, tempfile, zipfile, shutil
+import json, os, secrets, tempfile, zipfile, shutil
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -6,8 +6,10 @@ from fastapi.responses import FileResponse
 from pwdlib import PasswordHash
 import jwt
 from app import database
+from app.helpers import DEFAULT_RUBRIC_LABELS, questions
 from app.course_access import require_assignment_access, require_course_access
 from app.allocation import allocate_group_reviews, allocate_reviews
+from app.question_logic import normalize_question, validate_answer
 from app.security import (
     current_user,
     instructor,
@@ -25,6 +27,7 @@ from app.schemas import (
     ReviewDraft,
     ModerationIn,
     FlagIn,
+    AssignmentFormAnswer,
 )
 
 router = APIRouter()
@@ -38,20 +41,30 @@ PROMPTS = [
 ]
 
 
-def questions(c, aid):
-    return [
-        dict(id=r["id"], prompt=r["prompt"], order=r["question_order"])
-        for r in c.execute(
-            "SELECT * FROM questions WHERE assignment_id=? ORDER BY question_order",
-            (aid,),
-        )
-    ]
-
-
 def assignment(c, r):
     d = dict(r)
     d["questions"] = questions(c, r["id"])
     return d
+
+
+def normalized_questions(values):
+    source = values or [
+        {"prompt": prompt}
+        for prompt in PROMPTS
+    ]
+    return [
+        normalize_question(
+            question
+            if hasattr(question, "model_dump")
+            else {
+                **question,
+                "settings": question.get("settings")
+                or {"labels": DEFAULT_RUBRIC_LABELS},
+            },
+            index,
+        )
+        for index, question in enumerate(source)
+    ]
 
 
 @router.get("/api/question-templates")
@@ -148,13 +161,227 @@ def get_assignments(course_id: int | None = None, u=Depends(current_user)):
         ]
 
 
+def assignment_form_questions(c, course_id, student_id, assignment_id=None):
+    query = """
+        SELECT q.*,a.title assignment_title,a.due_at,a.status,a.group_mode
+        FROM questions q
+        JOIN assignments a ON a.id=q.assignment_id
+        JOIN courses co ON co.id=a.course_id
+        JOIN course_students cs ON cs.course_id=co.id
+        WHERE cs.student_id=? AND co.id=? AND co.is_archived=0
+          AND a.status='open'
+          AND (q.recipient IN ('self','team') OR q.question_type='points')
+    """
+    params = [student_id, course_id]
+    if assignment_id is not None:
+        query += " AND a.id=?"
+        params.append(assignment_id)
+    query += " ORDER BY a.due_at,a.id,q.question_order"
+    rows = c.execute(query, params).fetchall()
+    result = []
+    for row in rows:
+        if row["recipient"] == "team":
+            membership = c.execute(
+                """
+                SELECT g.id,g.name FROM course_group_members gm
+                JOIN course_groups g ON g.id=gm.group_id
+                WHERE gm.course_id=? AND gm.student_id=? AND g.is_archived=0
+                """,
+                (course_id, student_id),
+            ).fetchone()
+            recipient_key = f"group:{membership['id']}" if membership else None
+            recipient_name = membership["name"] if membership else None
+            eligible_peers = []
+            scope = "team"
+        else:
+            membership = None
+            recipient_key = f"student:{student_id}"
+            recipient_name = None
+            scope = "student"
+            eligible_rows = c.execute(
+                """
+                SELECT s.id,s.display_name FROM course_students cs
+                JOIN students s ON s.id=cs.student_id
+                WHERE cs.course_id=? AND cs.student_id<>?
+                AND (
+                    ?='course'
+                    OR EXISTS(
+                        SELECT 1 FROM course_group_members mine
+                        JOIN course_group_members peer
+                          ON peer.course_id=mine.course_id AND peer.group_id=mine.group_id
+                        JOIN course_groups g ON g.id=peer.group_id AND g.is_archived=0
+                        WHERE mine.course_id=cs.course_id AND mine.student_id=?
+                          AND peer.student_id=cs.student_id
+                    )
+                )
+                ORDER BY s.display_name COLLATE NOCASE
+                """,
+                (
+                    course_id,
+                    student_id,
+                    row["group_mode"],
+                    student_id,
+                ),
+            ).fetchall()
+            eligible_peers = [
+                {"id": peer["id"], "name": peer["display_name"]}
+                for peer in eligible_rows
+            ]
+        settings = json.loads(row["settings"])
+        available = recipient_key is not None and not due_passed(row["due_at"])
+        if row["question_type"] == "points" and not eligible_peers:
+            available = False
+        existing = (
+            c.execute(
+                """
+                SELECT answer_json,submitted_at FROM assignment_form_answers
+                WHERE question_id=? AND recipient_key=?
+                """,
+                (row["id"], recipient_key),
+            ).fetchone()
+            if recipient_key
+            else None
+        )
+        item = {
+            "id": row["id"],
+            "assignment_id": row["assignment_id"],
+            "assignment_title": row["assignment_title"],
+            "due_at": row["due_at"],
+            "prompt": row["prompt"],
+            "type": row["question_type"],
+            "recipient": row["recipient"],
+            "settings": settings,
+            "scope": scope,
+            "recipient_name": recipient_name,
+            "available": available,
+            "eligible_peers": eligible_peers,
+            "points_pool": (
+                settings.get("points_per_peer", 10) * len(eligible_peers)
+                if row["question_type"] == "points"
+                else None
+            ),
+            "value": json.loads(existing["answer_json"]) if existing else None,
+            "submitted_at": existing["submitted_at"] if existing else None,
+        }
+        result.append(item)
+    return result
+
+
+@router.get("/api/my/assignment-forms")
+def my_assignment_forms(
+    course_id: int,
+    assignment_id: int | None = None,
+    u=Depends(student),
+):
+    with database.get_connection() as c:
+        require_course_access(c, course_id, u, active=True)
+        return {
+            "items": assignment_form_questions(
+                c, course_id, u["student_id"], assignment_id
+            )
+        }
+
+
+@router.put("/api/my/assignment-forms/{question_id}")
+def submit_assignment_form(
+    question_id: int,
+    x: AssignmentFormAnswer,
+    u=Depends(student),
+):
+    with database.transaction(immediate=True) as c:
+        question = c.execute(
+            """
+            SELECT q.*,a.course_id,a.due_at,a.status,a.group_mode
+            FROM questions q JOIN assignments a ON a.id=q.assignment_id
+            WHERE q.id=?
+            """,
+            (question_id,),
+        ).fetchone()
+        if not question:
+            raise HTTPException(404, "Question not found")
+        require_course_access(c, question["course_id"], u, active=True)
+        if question["status"] != "open" or due_passed(question["due_at"]):
+            raise HTTPException(409, "This assignment is closed or past due")
+        if question["recipient"] == "team":
+            membership = c.execute(
+                """
+                SELECT g.id FROM course_group_members gm
+                JOIN course_groups g ON g.id=gm.group_id
+                WHERE gm.course_id=? AND gm.student_id=? AND g.is_archived=0
+                """,
+                (question["course_id"], u["student_id"]),
+            ).fetchone()
+            if not membership:
+                raise HTTPException(409, "Join an active team before answering this question")
+            recipient_key = f"group:{membership['id']}"
+        elif question["question_type"] == "points":
+            recipient_key = f"student:{u['student_id']}"
+        elif question["recipient"] == "self":
+            recipient_key = f"student:{u['student_id']}"
+        else:
+            raise HTTPException(422, "This question is answered as part of a peer review")
+
+        eligible = assignment_form_questions(
+            c, question["course_id"], u["student_id"], question["assignment_id"]
+        )
+        form = next((item for item in eligible if item["id"] == question_id), None)
+        if not form or not form["available"]:
+            raise HTTPException(409, "This question is not available to your current course or team")
+        existing = c.execute(
+            """
+            SELECT 1 FROM assignment_form_answers
+            WHERE question_id=? AND recipient_key=?
+            """,
+            (question_id, recipient_key),
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, "Your response to this question has already been submitted")
+        if question["question_type"] == "points":
+            value = x.value
+            peers = {peer["id"] for peer in form["eligible_peers"]}
+            if (
+                not isinstance(value, dict)
+                or set(value) != peers
+                or any(
+                    isinstance(points, bool)
+                    or not isinstance(points, int)
+                    or points < 0
+                    for points in value.values()
+                )
+                or sum(value.values()) != form["points_pool"]
+            ):
+                raise HTTPException(
+                    422,
+                    f"Distribute exactly {form['points_pool']} whole points among the listed teammates",
+                )
+        else:
+            value = validate_answer(question, x.value)
+        c.execute(
+            """
+            INSERT INTO assignment_form_answers(
+                assignment_id,question_id,respondent_id,recipient_key,answer_json
+            ) VALUES(?,?,?,?,?)
+            """,
+            (
+                question["assignment_id"],
+                question_id,
+                u["student_id"],
+                recipient_key,
+                json.dumps(value),
+            ),
+        )
+    return {"question_id": question_id, "submitted": True}
+
+
 @router.post("/api/assignments", status_code=201)
 def create_assignment(x: AssignmentIn, u=Depends(instructor)):
     if x.course_id is None:
         raise HTTPException(422, "A course is required")
-    qs = x.questions or [{"prompt": p, "order": i + 1} for i, p in enumerate(PROMPTS)]
-    if len(qs) != 5:
-        raise HTTPException(422, "Exactly five questions are required")
+    qs = normalized_questions(x.questions)
+    if not any(q["recipient"] == "peer" and q["type"] != "points" for q in qs):
+        raise HTTPException(
+            422, "Add at least one peer question that is answered for each review"
+        )
     with database.transaction(immediate=True) as c:
         require_course_access(c, x.course_id, u, active=True)
         aid = c.execute(
@@ -162,8 +389,22 @@ def create_assignment(x: AssignmentIn, u=Depends(instructor)):
             (x.title, x.instructions, x.due_at, x.course_id, x.group_mode),
         ).lastrowid
         c.executemany(
-            "INSERT INTO questions(assignment_id,prompt,question_order) VALUES(?,?,?)",
-            [(aid, q["prompt"], q.get("order", i + 1)) for i, q in enumerate(qs)],
+            """
+            INSERT INTO questions(
+                assignment_id,prompt,question_order,question_type,recipient,settings
+            ) VALUES(?,?,?,?,?,?)
+            """,
+            [
+                (
+                    aid,
+                    question["prompt"],
+                    question["order"],
+                    question["type"],
+                    question["recipient"],
+                    json.dumps(question["settings"]),
+                )
+                for question in qs
+            ],
         )
         return assignment(
             c, c.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()
@@ -191,15 +432,24 @@ def update_assignment(aid: int, x: AssignmentIn, u=Depends(instructor)):
                 409, "Review group mode cannot change after allocations are generated"
             )
         if c.execute(
-            "SELECT 1 FROM reviews r JOIN allocations a ON a.id=r.allocation_id WHERE a.assignment_id=? AND (r.status='submitted' OR EXISTS(SELECT 1 FROM review_answers ra WHERE ra.review_id=r.id))",
-            (aid,),
+            """
+            SELECT 1 FROM reviews r JOIN allocations a ON a.id=r.allocation_id
+            WHERE a.assignment_id=? AND (
+                r.status='submitted'
+                OR EXISTS(SELECT 1 FROM review_answers ra WHERE ra.review_id=r.id)
+                OR EXISTS(SELECT 1 FROM question_answers qa WHERE qa.review_id=r.id)
+            )
+            UNION ALL
+            SELECT 1 FROM assignment_form_answers WHERE assignment_id=? LIMIT 1
+            """,
+            (aid, aid),
         ).fetchone():
             raise HTTPException(409, "Rubric is locked after review creation")
-        qs = x.questions or [
-            {"prompt": p, "order": i + 1} for i, p in enumerate(PROMPTS)
-        ]
-        if len(qs) != 5:
-            raise HTTPException(422, "Exactly five questions are required")
+        qs = normalized_questions(x.questions)
+        if not any(q["recipient"] == "peer" and q["type"] != "points" for q in qs):
+            raise HTTPException(
+                422, "Add at least one peer question that is answered for each review"
+            )
         c.execute(
             "UPDATE assignments SET title=?,instructions=?,due_at=?,group_mode=? WHERE id=?",
             (x.title, x.instructions, x.due_at, x.group_mode, aid),
@@ -208,16 +458,42 @@ def update_assignment(aid: int, x: AssignmentIn, u=Depends(instructor)):
             "SELECT id FROM questions WHERE assignment_id=? ORDER BY question_order",
             (aid,),
         ).fetchall()
+        c.execute(
+            "UPDATE questions SET question_order=-id WHERE assignment_id=?",
+            (aid,),
+        )
         for i, q in enumerate(qs):
             if i < len(existing):
                 c.execute(
-                    "UPDATE questions SET prompt=?,question_order=? WHERE id=?",
-                    (q["prompt"], q.get("order", i + 1), existing[i]["id"]),
+                    """
+                    UPDATE questions
+                    SET prompt=?,question_order=?,question_type=?,recipient=?,settings=?
+                    WHERE id=?
+                    """,
+                    (
+                        q["prompt"],
+                        q["order"],
+                        q["type"],
+                        q["recipient"],
+                        json.dumps(q["settings"]),
+                        existing[i]["id"],
+                    ),
                 )
             else:
                 c.execute(
-                    "INSERT INTO questions(assignment_id,prompt,question_order) VALUES(?,?,?)",
-                    (aid, q["prompt"], q.get("order", i + 1)),
+                    """
+                    INSERT INTO questions(
+                        assignment_id,prompt,question_order,question_type,recipient,settings
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        aid,
+                        q["prompt"],
+                        q["order"],
+                        q["type"],
+                        q["recipient"],
+                        json.dumps(q["settings"]),
+                    ),
                 )
         for old in existing[len(qs) :]:
             c.execute("DELETE FROM questions WHERE id=?", (old["id"],))
@@ -470,9 +746,14 @@ def alloc(aid: int, x: AllocationIn = AllocationIn(), u=Depends(instructor)):
                 }
             if any(
                 reciprocal_size[submission_cohort[submission_id][0]] != 2
+                and x.reviewers_per_submission
+                != reciprocal_size[submission_cohort[submission_id][0]] - 1
                 for _, submission_id in reciprocal_pairs
             ):
-                raise HTTPException(422, "Reciprocal reviews are not allowed")
+                raise HTTPException(
+                    422,
+                    "Reciprocal reviews are only allowed when a group has two members or every teammate reviews every other teammate",
+                )
 
             for reviewer_loads in loads.values():
                 if (
@@ -483,6 +764,10 @@ def alloc(aid: int, x: AllocationIn = AllocationIn(), u=Depends(instructor)):
                         422,
                         "Manual allocation must distribute review workloads as evenly as possible within each review group",
                     )
+        c.execute(
+            "UPDATE assignments SET reviewers_per_submission=? WHERE id=?",
+            (x.reviewers_per_submission, aid),
+        )
         c.executemany(
             "INSERT INTO allocations(assignment_id,reviewer_id,submission_id) VALUES(?,?,?)",
             [(aid, rv, submission_id) for rv, submission_id in pairs],

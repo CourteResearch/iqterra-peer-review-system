@@ -10,6 +10,13 @@ DATA_DIR = Path(os.getenv("IQT02_DATA_DIR", PROJECT_DIR / "data")).expanduser()
 DATABASE_PATH = Path(
     os.getenv("IQT02_DATABASE_PATH", DATA_DIR / "iqterra.sqlite3")
 ).expanduser()
+DEFAULT_QUESTION_PROMPTS = [
+    "The submission demonstrates a clear understanding of the topic.",
+    "Claims are supported by relevant evidence.",
+    "The reasoning is coherent and well developed.",
+    "The structure and writing are clear.",
+    "The work offers thoughtful or original insight.",
+]
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -249,3 +256,152 @@ def init_db():
                     "CREATE INDEX IF NOT EXISTS idx_sub_assignment_submitted ON submissions(assignment_id,is_submitted)"
                 )
             con.execute("INSERT INTO schema_migrations(version) VALUES(9)")
+            version = 9
+
+        if version < 10:
+            has_questions = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='questions'"
+            ).fetchone()
+            if not has_questions:
+                con.execute(
+                    """
+                    CREATE TABLE questions(
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                        prompt TEXT NOT NULL,
+                        question_order INTEGER NOT NULL,
+                        UNIQUE(assignment_id,question_order)
+                    )
+                    """
+                )
+                for assignment in con.execute("SELECT id FROM assignments").fetchall():
+                    con.executemany(
+                        "INSERT INTO questions(assignment_id,prompt,question_order) VALUES(?,?,?)",
+                        [
+                            (assignment["id"], prompt, index)
+                            for index, prompt in enumerate(DEFAULT_QUESTION_PROMPTS, 1)
+                        ],
+                    )
+            question_columns = {
+                row["name"] for row in con.execute("PRAGMA table_info(questions)")
+            }
+            if "question_type" not in question_columns:
+                con.execute(
+                    "ALTER TABLE questions ADD COLUMN question_type TEXT NOT NULL DEFAULT 'rubric'"
+                )
+            if "recipient" not in question_columns:
+                con.execute(
+                    "ALTER TABLE questions ADD COLUMN recipient TEXT NOT NULL DEFAULT 'peer'"
+                )
+            if "settings" not in question_columns:
+                con.execute(
+                    "ALTER TABLE questions ADD COLUMN settings TEXT NOT NULL DEFAULT '{\"labels\":[\"Strongly disagree\",\"Disagree\",\"Neither agree nor disagree\",\"Agree\",\"Strongly agree\"]}'"
+                )
+            con.executescript("""
+                CREATE TABLE question_answers(
+                    review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+                    question_id INTEGER NOT NULL REFERENCES questions(id),
+                    answer_json TEXT NOT NULL,
+                    PRIMARY KEY(review_id,question_id)
+                );
+                CREATE TABLE assignment_form_answers(
+                    assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                    question_id INTEGER NOT NULL REFERENCES questions(id),
+                    respondent_id TEXT NOT NULL REFERENCES students(id),
+                    recipient_key TEXT NOT NULL,
+                    answer_json TEXT NOT NULL,
+                    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(question_id,recipient_key)
+                );
+                CREATE INDEX idx_assignment_form_respondent
+                    ON assignment_form_answers(assignment_id,respondent_id);
+            """)
+            has_legacy_answers = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_answers'"
+            ).fetchone()
+            if has_legacy_answers:
+                for answer in con.execute(
+                    "SELECT review_id,question_id,score FROM review_answers"
+                ).fetchall():
+                    con.execute(
+                        """
+                        INSERT INTO question_answers(review_id,question_id,answer_json)
+                        VALUES(?,?,?)
+                        """,
+                        (
+                            answer["review_id"],
+                            answer["question_id"],
+                            str(answer["score"]),
+                        ),
+                    )
+            con.execute("INSERT INTO schema_migrations(version) VALUES(10)")
+            version = 10
+
+        if version < 11:
+            assignment_columns = {
+                row["name"] for row in con.execute("PRAGMA table_info(assignments)")
+            }
+            if "reviewers_per_submission" not in assignment_columns:
+                con.execute(
+                    "ALTER TABLE assignments ADD COLUMN reviewers_per_submission INTEGER NOT NULL DEFAULT 3"
+                )
+            con.execute("DROP TRIGGER IF EXISTS allocation_no_reciprocal")
+            has_allocations = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='allocations'"
+            ).fetchone()
+            if has_allocations:
+                con.executescript("""
+                    CREATE TRIGGER allocation_no_reciprocal BEFORE INSERT ON allocations
+                    WHEN EXISTS(
+                        SELECT 1
+                        FROM allocations old
+                        JOIN submissions old_submission ON old_submission.id=old.submission_id
+                        JOIN assignments cohort_assignment
+                          ON cohort_assignment.id=NEW.assignment_id
+                        WHERE old.assignment_id=NEW.assignment_id
+                          AND old.reviewer_id=(
+                              SELECT student_id FROM submissions WHERE id=NEW.submission_id
+                          )
+                          AND old_submission.student_id=NEW.reviewer_id
+                          AND (
+                              SELECT COUNT(*)
+                              FROM submissions cohort_submission
+                              LEFT JOIN course_group_members cohort_member
+                                ON cohort_member.course_id=cohort_assignment.course_id
+                               AND cohort_member.student_id=cohort_submission.student_id
+                              WHERE cohort_submission.assignment_id=NEW.assignment_id
+                                AND (
+                                    cohort_assignment.group_mode='course'
+                                    OR cohort_member.group_id=(
+                                        SELECT target_member.group_id
+                                        FROM submissions target_submission
+                                        JOIN course_group_members target_member
+                                          ON target_member.course_id=cohort_assignment.course_id
+                                         AND target_member.student_id=target_submission.student_id
+                                        WHERE target_submission.id=NEW.submission_id
+                                    )
+                                )
+                          ) > 2
+                          AND NOT (
+                              cohort_assignment.group_mode='within_group'
+                              AND cohort_assignment.reviewers_per_submission >= (
+                                  SELECT COUNT(*)
+                                  FROM course_group_members group_member
+                                  JOIN course_groups team
+                                    ON team.id=group_member.group_id
+                                   AND team.is_archived=0
+                                  WHERE group_member.course_id=cohort_assignment.course_id
+                                    AND group_member.group_id=(
+                                        SELECT target_member.group_id
+                                        FROM submissions target_submission
+                                        JOIN course_group_members target_member
+                                          ON target_member.course_id=cohort_assignment.course_id
+                                         AND target_member.student_id=target_submission.student_id
+                                        WHERE target_submission.id=NEW.submission_id
+                                    )
+                              ) - 1
+                          )
+                    )
+                    BEGIN SELECT RAISE(ABORT,'reciprocal allocation is forbidden'); END;
+                """)
+            con.execute("INSERT INTO schema_migrations(version) VALUES(11)")

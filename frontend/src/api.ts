@@ -24,7 +24,14 @@ export type CourseGroup = {
   member_count?: number;
   members: Student[];
 };
-export type Question = { id?: number | string; prompt: string; order: number };
+export type Question = {
+  id?: number | string;
+  prompt: string;
+  order: number;
+  type?: "rubric" | "text" | "contribution" | "points";
+  recipient?: "peer" | "self" | "team";
+  settings?: { labels?: string[]; points_per_peer?: number; max_length?: number };
+};
 export type Template = { id?: number | string; prompt: string; title?: string };
 export type Assignment = {
   id: number | string;
@@ -65,11 +72,14 @@ export type Submission = {
 export type Review = {
   id: number | string;
   assignment_id?: number | string;
+  assignment_title?: string;
+  submission_ready?: boolean;
   submission_id?: number | string;
   submission?: Submission;
   status?: string;
   due_at?: string;
   answers?: { question_id: number | string; score: number }[];
+  responses?: { question_id: number | string; value: unknown }[];
   feedback?: string;
   revision_note?: string | null;
 };
@@ -91,15 +101,37 @@ export type SubmittedReview = {
   open_flag_reason?: string | null;
   questions: Question[];
   answers: { question_id: number | string; score: number }[];
+  responses: { question_id: number | string; value: unknown }[];
+};
+export type AssignmentForm = {
+  id: number | string;
+  assignment_id: number | string;
+  assignment_title: string;
+  due_at: string;
+  prompt: string;
+  type: Question["type"];
+  recipient: Question["recipient"];
+  settings: Question["settings"];
+  scope: "student" | "team";
+  recipient_name?: string | null;
+  available: boolean;
+  eligible_peers: { id: string; name: string }[];
+  points_pool?: number | null;
+  value: unknown;
+  submitted_at?: string | null;
 };
 export type OverviewData = {
   assignment?: Assignment;
   question_outcomes?: {
     question_id: number | string;
     prompt: string;
+    type?: Question["type"];
+    recipient?: Question["recipient"];
+    settings?: Question["settings"];
     responses: number;
     average_score: number | null;
     distribution: Record<string, number>;
+    response_details?: { respondent: string; value: unknown }[];
   }[];
   students?: {
     id: number | string;
@@ -125,6 +157,7 @@ export type ModerationItem = {
   file_url?: string;
   questions?: Question[];
   answers?: { question_id: number | string; score: number }[];
+  responses?: { question_id: number | string; value: unknown }[];
 };
 export type Student = { id: number | string; username: string; display_name: string };
 export type StudentCreated = Student & { one_time_credential: string; must_change_password: true };

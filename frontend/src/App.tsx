@@ -4,6 +4,7 @@ import {
   AllocationOption,
   AllocationReviewer,
   Assignment,
+  AssignmentForm,
   Course,
   CourseGroup,
   getToken,
@@ -24,6 +25,8 @@ type Action = <T>(
   action: () => Promise<T>,
   then?: (value: T) => void,
 ) => Promise<T | undefined>;
+type QuestionType = NonNullable<Question["type"]>;
+type QuestionRecipient = NonNullable<Question["recipient"]>;
 type Screen =
   | "overview"
   | "courses"
@@ -33,6 +36,7 @@ type Screen =
   | "allocation"
   | "moderation"
   | "submitted_reviews"
+  | "forms"
   | "reviews"
   | "submit";
 const SCALE = [
@@ -42,6 +46,48 @@ const SCALE = [
   "Agree",
   "Strongly agree",
 ];
+const DEFAULT_RUBRIC_LABELS = [
+  "Strongly disagree",
+  "Disagree",
+  "Neither agree nor disagree",
+  "Agree",
+  "Strongly agree",
+];
+function questionResponseText(
+  question: Question,
+  responses?: { question_id: number | string; value: unknown }[],
+  answers?: { question_id: number | string; score: number }[],
+) {
+  const response = responses?.find(
+    (answer) => String(answer.question_id) === String(question.id),
+  )?.value;
+  const legacyScore = answers?.find(
+    (answer) => String(answer.question_id) === String(question.id),
+  )?.score;
+  const value = response ?? legacyScore;
+  if (value === undefined || value === null) return "Not answered";
+  if (question.type === "rubric" || !question.type) {
+    const labels = question.settings?.labels || DEFAULT_RUBRIC_LABELS;
+    return typeof value === "number"
+      ? `${value} / ${labels.length} · ${labels[value - 1] || "Rating"}`
+      : String(value);
+  }
+  if (question.type === "contribution")
+    return `${String(value)} / 100 equal-share index`;
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+function totalPointValue(value: unknown): number {
+  return Object.values(recordValue(value)).reduce<number>(
+    (sum, point) => sum + (typeof point === "number" ? point : 0),
+    0,
+  );
+}
 function Button({
   children,
   ...props
@@ -184,6 +230,7 @@ export default function App() {
               ]
             : [
                 ["submit", "My assignments"],
+                ["forms", "Contribution & reflection"],
                 ["reviews", "Reviews to complete"],
               ]
           ).map(([id, label]) => (
@@ -206,9 +253,6 @@ export default function App() {
             <br />
             <b>Not configured</b>
           </p>
-          <button className="logout" onClick={signedOut}>
-            Sign out · {user.display_name || user.username}
-          </button>
         </div>
       </aside>
       <main className="main-area">
@@ -216,7 +260,15 @@ export default function App() {
           <span>
             {instructor ? "Instructor workspace" : "Student workspace"}
           </span>
-          <span className="sandbox-pill">Local peer review</span>
+          <div className="account-controls">
+            <span className={`account-type ${instructor ? "instructor" : "student"}`}>
+              {instructor ? "Instructor" : "Student"}
+            </span>
+            <span className="account-name">{user.display_name || user.username}</span>
+            <button className="account-signout" onClick={signedOut}>
+              Sign out
+            </button>
+          </div>
         </header>
         <div className="content-wrap">
           <div className="page-heading">
@@ -308,11 +360,15 @@ export default function App() {
                 courseId={selectedCourseId}
                 onSuccess={setSuccess}
               />
+            ) : screen === "moderation" ? (
+              <Moderation run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
             ) : (
               <Moderation run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
             )
           ) : screen === "submit" ? (
             <SubmissionForm run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
+          ) : screen === "forms" ? (
+            <AssignmentForms run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           ) : (
             <MyReviews run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           )}
@@ -337,6 +393,7 @@ function heading(screen: Screen, instructor: boolean) {
           allocation: "Review allocation",
           submitted_reviews: "Submitted reviews",
           moderation: "Moderation",
+          forms: "Contribution & reflection",
         } as Record<string, string>
       )[screen]
     : screen === "submit"
@@ -566,28 +623,44 @@ function Overview({
                 <thead>
                   <tr>
                     <th>Question</th>
+                    <th>Format / recipient</th>
                     <th>Responses</th>
                     <th>Average</th>
-                    {[1, 2, 3, 4, 5].map((score) => (
-                      <th key={score}>{score}</th>
-                    ))}
+                    <th>Distribution</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data.question_outcomes || []).map((outcome) => (
                     <tr key={outcome.question_id}>
                       <td>{outcome.prompt}</td>
+                      <td>{outcome.type || "rubric"} · {outcome.recipient || "peer"}</td>
                       <td>{outcome.responses}</td>
                       <td>
                         {outcome.average_score == null
                           ? "—"
                           : outcome.average_score.toFixed(2)}
                       </td>
-                      {[1, 2, 3, 4, 5].map((score) => (
-                        <td key={score}>
-                          {outcome.distribution?.[String(score)] ?? 0}
-                        </td>
-                      ))}
+                      <td>
+                        {outcome.type === "rubric"
+                          ? (outcome.settings?.labels || DEFAULT_RUBRIC_LABELS)
+                              .map((label, index) => `${label}: ${outcome.distribution?.[String(index + 1)] ?? 0}`)
+                              .join(" · ")
+                          : outcome.response_details?.length
+                            ? outcome.response_details.map((response) =>
+                                `${response.respondent}: ${
+                                  response.value && typeof response.value === "object"
+                                    ? Object.entries(recordValue(response.value))
+                                        .map(([name, value]) => `${name} ${String(value)}`)
+                                        .join(", ")
+                                    : String(response.value)
+                                }`,
+                              ).join(" · ")
+                            : outcome.type === "points"
+                              ? "No point distributions submitted"
+                              : outcome.type === "text"
+                                ? "No written responses submitted"
+                                : "No contribution responses submitted"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1071,9 +1144,8 @@ function Assignments({
   const [instructions, setInstructions] = useState("");
   const [due, setDue] = useState("");
   const [groupMode, setGroupMode] = useState<"course" | "within_group">("course");
-  const [questions, setQuestions] = useState<Question[]>(
-    Array.from({ length: 5 }, (_, i) => ({ prompt: "", order: i + 1 })),
-  );
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [newQuestionType, setNewQuestionType] = useState<QuestionType>("rubric");
   useEffect(() => {
     void run<Template[] | { items?: Template[]; results?: Template[] }>(
       () =>
@@ -1083,14 +1155,13 @@ function Assignments({
       (v) => {
         const values = list<Template>(v);
         setTemplates(values);
-        setQuestions((prev) =>
-          prev.some((q) => q.prompt.trim())
-            ? prev
-            : Array.from({ length: 5 }, (_, i) => ({
-                prompt: values[i]?.prompt || "",
-                order: i + 1,
-              })),
-        );
+        setQuestions((previous) => previous.length ? previous : values.map((value, i) => ({
+          prompt: value.prompt,
+          order: i + 1,
+          type: "rubric",
+          recipient: "peer",
+          settings: { labels: DEFAULT_RUBRIC_LABELS },
+        })));
       },
     );
   }, [run]);
@@ -1100,12 +1171,53 @@ function Assignments({
     setInstructions(a?.instructions || "");
     setDue(a?.due_at?.slice(0, 16) || "");
     setGroupMode(a?.group_mode || "course");
-    setQuestions(
-      Array.from({ length: 5 }, (_, i) => ({
-        prompt: a?.questions?.[i]?.prompt || templates[i]?.prompt || "",
-        order: i + 1,
-      })),
-    );
+    setQuestions(a?.questions?.length
+      ? a.questions.map((question, i) => ({
+          ...question,
+          order: i + 1,
+          type: question.type || "rubric",
+          recipient: question.recipient || "peer",
+          settings: question.settings || { labels: DEFAULT_RUBRIC_LABELS },
+        }))
+      : (templates.length ? templates : DEFAULT_RUBRIC_LABELS.map((prompt) => ({ prompt })))
+          .map((question, i) => ({
+            prompt: question.prompt,
+            order: i + 1,
+            type: "rubric",
+            recipient: "peer",
+            settings: { labels: DEFAULT_RUBRIC_LABELS },
+          })));
+  }
+  function addQuestion() {
+    const type = newQuestionType;
+    setQuestions((current) => [
+      ...current,
+      {
+        prompt: "",
+        order: current.length + 1,
+        type,
+        recipient: type === "points" ? "peer" : "peer",
+        settings: type === "rubric"
+          ? { labels: DEFAULT_RUBRIC_LABELS }
+          : type === "points"
+            ? { points_per_peer: 10 }
+            : {},
+      },
+    ]);
+  }
+  function updateQuestion(index: number, patch: Partial<Question>) {
+    setQuestions((current) => current.map((question, i) =>
+      i === index ? { ...question, ...patch } : question,
+    ));
+  }
+  function moveQuestion(index: number, offset: -1 | 1) {
+    const destination = index + offset;
+    if (destination < 0 || destination >= questions.length) return;
+    setQuestions((current) => {
+      const moved = [...current];
+      [moved[index], moved[destination]] = [moved[destination], moved[index]];
+      return moved.map((question, i) => ({ ...question, order: i + 1 }));
+    });
   }
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -1115,7 +1227,7 @@ function Assignments({
       due_at: due ? new Date(due).toISOString() : null,
       course_id: Number(courseId),
       group_mode: groupMode,
-      questions: questions.map((q) => ({ prompt: q.prompt, order: q.order })),
+      questions: questions.map((q, index) => ({ ...q, order: index + 1 })),
     };
     const result = await run(() =>
       api(editing ? `/assignments/${editing.id}` : "/assignments", {
@@ -1146,7 +1258,7 @@ function Assignments({
         <div className="panel-heading">
           <h2>{editing ? "Edit assignment" : "Create assignment"}</h2>
           <span className="status-pill">
-            Exactly five questions · 1–5 Likert
+            {questions.length} question{questions.length === 1 ? "" : "s"} · mixed formats
           </span>
         </div>
         <form className="stack" onSubmit={save}>
@@ -1193,25 +1305,115 @@ function Assignments({
             />
           </label>
           <h3>Assessment questions</h3>
-          {questions.map((q, i) => (
-            <label key={i}>
-              Question {i + 1}
-              <input
-                required
-                value={q.prompt}
-                onChange={(e) =>
-                  setQuestions((prev) =>
-                    prev.map((x, j) =>
-                      j === i ? { ...x, prompt: e.target.value } : x,
-                    ),
-                  )
-                }
-              />
+          <div className="question-list">
+          {questions.map((q, i) => {
+            const type = q.type || "rubric";
+            const recipient = q.recipient || "peer";
+            const labels = q.settings?.labels || DEFAULT_RUBRIC_LABELS;
+            return (
+              <article className="question-card" key={q.id ?? `question-${i}`}>
+                <div className="panel-heading">
+                  <h3>Question {i + 1}</h3>
+                  <div className="action-row">
+                    <Button className="secondary" type="button" disabled={i === 0} onClick={() => moveQuestion(i, -1)}>Move up</Button>
+                    <Button className="secondary" type="button" disabled={i === questions.length - 1} onClick={() => moveQuestion(i, 1)}>Move down</Button>
+                    <Button className="secondary" type="button" disabled={questions.length <= 1} onClick={() => setQuestions((current) => current.filter((_, index) => index !== i).map((question, index) => ({ ...question, order: index + 1 })))}>Delete</Button>
+                  </div>
+                </div>
+                <label>
+                  Question prompt
+                  <textarea required maxLength={500} rows={2} value={q.prompt} onChange={(event) => updateQuestion(i, { prompt: event.target.value })} />
+                </label>
+                <div className="form-grid question-settings">
+                  <label>
+                    Answer format
+                    <select
+                      value={type}
+                      onChange={(event) => {
+                        const nextType = event.target.value as QuestionType;
+                        updateQuestion(i, {
+                          type: nextType,
+                          recipient: nextType === "points" ? "peer" : recipient,
+                          settings: nextType === "rubric"
+                            ? { labels: DEFAULT_RUBRIC_LABELS }
+                            : nextType === "points"
+                              ? { points_per_peer: 10 }
+                              : {},
+                        });
+                      }}
+                    >
+                      <option value="rubric">Rubric scale</option>
+                      <option value="contribution">Contribution score (100 = equal)</option>
+                      <option value="points">Distribute points across teammates</option>
+                      <option value="text">Written response</option>
+                    </select>
+                  </label>
+                  <label>
+                    Who is this about?
+                    <select
+                      value={recipient}
+                      disabled={type === "points"}
+                      onChange={(event) => updateQuestion(i, { recipient: event.target.value as QuestionRecipient })}
+                    >
+                      <option value="peer">Each assigned teammate</option>
+                      <option value="self">The student themselves</option>
+                      <option value="team">The whole team (one shared response)</option>
+                    </select>
+                  </label>
+                </div>
+                {type === "rubric" && (
+                  <div className="question-options">
+                    <div className="panel-heading">
+                      <b>Rating choices ({labels.length}; choose 4 or 5)</b>
+                      {labels.length < 5 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: [...labels, `Level ${labels.length + 1}`] } })}>Add choice</Button>}
+                    </div>
+                    {labels.map((label, labelIndex) => (
+                      <div className="question-option" key={labelIndex}>
+                        <label>
+                          Choice {labelIndex + 1}
+                          <input value={label} maxLength={80} required onChange={(event) => updateQuestion(i, { settings: { labels: labels.map((value, index) => index === labelIndex ? event.target.value : value) } })} />
+                        </label>
+                        {labels.length > 4 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: labels.filter((_, index) => index !== labelIndex) } })}>Remove</Button>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {type === "contribution" && (
+                  <p className="muted">Students enter a whole-number contribution index from 0 to 200. 100 means an equal share; lower or higher indicates less or more contribution.</p>
+                )}
+                {type === "points" && (
+                  <div className="question-options">
+                    <label>
+                      Points per teammate
+                      <input type="number" min={1} max={100} value={q.settings?.points_per_peer ?? 10} onChange={(event) => updateQuestion(i, { settings: { points_per_peer: Number(event.target.value) } })} />
+                    </label>
+                    <p className="muted">Each student distributes this many points per eligible teammate, excluding themselves. The form calculates the required total and requires the points to add up exactly.</p>
+                  </div>
+                )}
+                {type === "text" && (
+                  <p className="muted">Students provide a written response of up to 4,000 characters for each selected person or team.</p>
+                )}
+                {(recipient === "self" || recipient === "team") && (
+                  <p className="muted">{recipient === "self" ? "Each student answers this once for themselves." : "One shared answer is collected per active team; make sure students are assigned to teams."}</p>
+                )}
+              </article>
+            );
+          })}
+          </div>
+          <div className="action-row question-add-row">
+            <label>
+              New question format
+              <select value={newQuestionType} onChange={(event) => setNewQuestionType(event.target.value as QuestionType)}>
+                <option value="rubric">Rubric scale</option>
+                <option value="contribution">Contribution score</option>
+                <option value="points">Distribute points</option>
+                <option value="text">Written response</option>
+              </select>
             </label>
-          ))}
+            <Button type="button" className="secondary" onClick={addQuestion}>Add question</Button>
+          </div>
           <p className="muted">
-            Templates provided: {templates.length || "loading"}. Edit any of the
-            five questions above.
+            Add at least one question answered for each peer review. Self and team questions appear in a separate student response form. Rubrics lock after the first response is submitted.
           </p>
           <Button type="submit">
             {editing ? "Save draft" : "Create assignment"}
@@ -1481,8 +1683,26 @@ function Allocation({
         (selectedAssignment?.group_mode !== "within_group" ||
           candidate.group_id === submission.group_id),
     );
+  const groupSizes = Array.from(
+    reviewers.reduce((sizes, reviewer) => {
+      if (reviewer.group_id !== null) {
+        sizes.set(reviewer.group_id, (sizes.get(reviewer.group_id) || 0) + 1);
+      }
+      return sizes;
+    }, new Map<number, number>()).values(),
+  );
+  const maxReviewersPerSubmission = selectedAssignment?.group_mode === "within_group"
+    ? groupSizes.length ? Math.min(...groupSizes.map((size) => size - 1)) : 0
+    : submissions.length - 1;
+  useEffect(() => {
+    if (maxReviewersPerSubmission > 0 && count > maxReviewersPerSubmission) {
+      setCount(maxReviewersPerSubmission);
+      setManualReviewers({});
+    }
+  }, [active, count, maxReviewersPerSubmission]);
   const manualReady =
     submissions.length > 0 &&
+    count <= maxReviewersPerSubmission &&
     submissions.every(
       (submission) =>
         (manualReviewers[String(submission.student_id)] || []).length === count,
@@ -1565,6 +1785,7 @@ function Allocation({
               <input
                 type="number"
                 min="1"
+                max={maxReviewersPerSubmission > 0 ? maxReviewersPerSubmission : undefined}
                 value={count}
                 onChange={(e) => {
                   setCount(Math.max(1, Number(e.target.value) || 1));
@@ -1581,11 +1802,13 @@ function Allocation({
           </div>
           <p className="muted">
             {selectedAssignment?.group_mode === "within_group"
-              ? "Team mode: each student reviews classmates from their own team only."
+              ? maxReviewersPerSubmission > 0
+                ? `Team mode: reviewers can only be teammates. For this roster, each submission can have up to ${maxReviewersPerSubmission} teammate reviewer${maxReviewersPerSubmission === 1 ? "" : "s"}.`
+                : "Team mode requires at least two active members in every review group."
               : "Course mode: students review peers across the whole course."}
-            {" "}Review loads are balanced; self-reviews and reciprocal pairs are not allowed.
+            {" "}Self-reviews are never assigned. Review loads are balanced; when every teammate is assigned to review every other teammate, reciprocal reviews are unavoidable.
           </p>
-          {mode === "manual" && !items.length && submissions.length > 0 && (
+          {mode === "manual" && !items.length && submissions.length > 0 && maxReviewersPerSubmission > 0 && (
             <div className="stack">
               <h3>Choose reviewers for each submission</h3>
               {submissions.map((submission) => {
@@ -1724,7 +1947,7 @@ function Moderation({
             <p><b>Flag reason:</b> {x.reason || "No flag reason provided."}</p>
             <h3>Flagged submission</h3><div className="submission-content">{x.submission_content || "No text content was provided."}{x.file_url && <p><a href={x.file_url} target="_blank" rel="noreferrer">Open attachment</a></p>}</div>
             {x.feedback && <p><b>Reviewer feedback:</b> {x.feedback}</p>}
-            {!!x.questions?.length && <div><h3>Scores</h3>{x.questions.slice(0,5).map(q => { const answer=x.answers?.find(a=>String(a.question_id)===String(q.id)); return <p key={String(q.id)}>{q.prompt}: <b>{answer ? `${answer.score} / 5` : "Not scored"}</b></p>; })}</div>}
+            {!!x.questions?.length && <div><h3>Responses</h3>{x.questions.map(q => <p key={String(q.id)}>{q.prompt}: <b>{questionResponseText(q, x.responses, x.answers)}</b></p>)}</div>}
             <small>{x.status || "Pending decision"}</small>
             <div className="action-row">
               <Button onClick={() => void decide(x, "approved")}>
@@ -1878,13 +2101,10 @@ function SubmittedReviews({
               </div>
               <h3>Assessment scores</h3>
               {item.questions.map((question) => {
-                const answer = item.answers.find(
-                  (entry) => String(entry.question_id) === String(question.id),
-                );
                 return (
                   <p className="submitted-review-score" key={String(question.id)}>
                     {question.prompt}
-                    <b>{answer ? `${answer.score} / 5 · ${SCALE[answer.score - 1]}` : "Not scored"}</b>
+                    <b>{questionResponseText(question, item.responses, item.answers)}</b>
                   </p>
                 );
               })}
@@ -1992,31 +2212,257 @@ function MyReviews({
     />
   ) : (
     <section className="panel">
-      <h2>Reviews allocated to you</h2>
+      <div className="panel-heading">
+        <h2>Reviews allocated to you</h2>
+        <Button className="secondary" onClick={() => void load()}>Refresh</Button>
+      </div>
       {reviews.length ? (
         reviews.map((r) => (
           <div className="list-row" key={r.id}>
             <div>
-              <b>{r.submission?.title || "Peer submission"}</b>
+              <b>
+                {r.submission_ready === false
+                  ? r.assignment_title || "Peer submission"
+                  : r.submission?.title || "Peer submission"}
+              </b>
               <small>
-                {r.status || "Ready to review"}
+                {r.status === "waiting_submission"
+                  ? "Waiting for the author to submit work"
+                  : r.status === "draft"
+                    ? "Ready to review"
+                    : r.status || "Ready to review"}
                 {r.due_at
                   ? ` · Due ${new Date(r.due_at).toLocaleDateString()}`
                   : ""}
               </small>
-              <p className="muted">Author identity is hidden.</p>
+              {r.submission_ready === false && (
+                <p className="muted">
+                  This allocation is saved. You can open the review after the author submits their work.
+                </p>
+              )}
+              {r.revision_note && (
+                <p className="muted">Lecturer revision request: {r.revision_note}</p>
+              )}
+              {r.submission_ready !== false && (
+                <p className="muted">Author identity is hidden.</p>
+              )}
             </div>
             <Button
+              disabled={r.submission_ready === false}
               onClick={() =>
                 void run<Review>(() => api(`/reviews/${r.id}`), setActive)
               }
             >
-              {r.status === "submitted" ? "View review" : "Review submission"}
+              {r.submission_ready === false
+                ? "Waiting for submission"
+                : r.status === "submitted"
+                  ? "View review"
+                  : "Review submission"}
             </Button>
           </div>
         ))
       ) : (
-        <Empty>No peer submissions are currently allocated to you.</Empty>
+        <Empty>
+          No reviews are allocated to you yet. If your lecturer has just made allocations, refresh this list.
+        </Empty>
+      )}
+    </section>
+  );
+}
+function AssignmentForms({
+  run,
+  courseId,
+  onSuccess,
+}: {
+  run: Action;
+  courseId: string;
+  onSuccess: (s: string) => void;
+}) {
+  const [items, setItems] = useState<AssignmentForm[]>([]);
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [validation, setValidation] = useState<Record<string, string>>({});
+  const load = useCallback(
+    () =>
+      run<{ items?: AssignmentForm[] }>(
+        () =>
+          api(`/my/assignment-forms?course_id=${encodeURIComponent(courseId)}`),
+        (response) => {
+          const forms = list(response);
+          setItems(forms);
+          setValues((current) => {
+            const next = { ...current };
+            for (const form of forms) {
+              const key = String(form.id);
+              if (!(key in next)) {
+                next[key] = form.value ?? (
+                  form.type === "points"
+                    ? Object.fromEntries(form.eligible_peers.map((peer) => [peer.id, 0]))
+                    : ""
+                );
+              }
+            }
+            return next;
+          });
+        },
+      ),
+    [courseId, run],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  async function submit(form: AssignmentForm) {
+    const key = String(form.id);
+    const value = values[key];
+    if (form.type === "points") {
+      const total = totalPointValue(value);
+      if (total !== form.points_pool) {
+        setValidation((current) => ({ ...current, [key]: `Allocate exactly ${form.points_pool} points before submitting.` }));
+        return;
+      }
+    } else if (typeof value === "string" && !value.trim()) {
+      setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
+      return;
+    } else if (value === undefined || value === null || value === "") {
+      setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
+      return;
+    }
+    setValidation((current) => ({ ...current, [key]: "" }));
+    const result = await run(() =>
+      api(`/my/assignment-forms/${form.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      }),
+    );
+    if (result !== undefined) {
+      await load();
+      onSuccess("Your response has been submitted.");
+    }
+  }
+  const grouped = items.reduce<Record<string, AssignmentForm[]>>((groups, form) => {
+    (groups[String(form.assignment_id)] ||= []).push(form);
+    return groups;
+  }, {});
+  return (
+    <section className="panel">
+      <h2>Contribution and reflection</h2>
+      <p className="muted">
+        Complete point distributions, self-reflections, and shared team questions here. Peer-specific rubric and written questions are answered in each allocated review.
+      </p>
+      {Object.entries(grouped).length ? Object.entries(grouped).map(([assignmentId, forms]) => (
+        <section className="student-form-assignment" key={assignmentId}>
+          <h3>{forms[0].assignment_title}</h3>
+          <small>Due {new Date(forms[0].due_at).toLocaleString()}</small>
+          {forms.map((form) => {
+            const key = String(form.id);
+            const value = values[key];
+            const disabled = !form.available || Boolean(form.submitted_at);
+            return (
+              <article className="question-card" key={key}>
+                <div className="panel-heading">
+                  <h3>{form.prompt}</h3>
+                  <span className="status-pill">
+                    {form.submitted_at
+                      ? "Submitted"
+                      : !form.available
+                        ? "Unavailable"
+                        : form.scope === "team"
+                          ? `Team · ${form.recipient_name || "not assigned"}`
+                          : form.type === "points"
+                            ? "Contribution"
+                            : "Self reflection"}
+                  </span>
+                </div>
+                {!form.available && (
+                  <Notice>
+                    {form.recipient === "team"
+                      ? "Ask your lecturer to assign you to an active team before answering."
+                      : "This question is unavailable because there are no eligible teammates to assess."}
+                  </Notice>
+                )}
+                {form.type === "points" && form.available && (
+                  <>
+                    <p className="muted">
+                      Allocate exactly {form.points_pool} points total ({form.settings?.points_per_peer} per teammate). You cannot allocate points to yourself.
+                    </p>
+                    {form.eligible_peers.map((peer) => {
+                      const distribution = recordValue(value);
+                      return (
+                        <label className="point-allocation-row" key={peer.id}>
+                          {peer.name}
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            disabled={disabled}
+                            value={String(distribution[peer.id] ?? 0)}
+                            onChange={(event) => setValues((current) => ({
+                              ...current,
+                              [key]: {
+                                ...recordValue(current[key]),
+                                [peer.id]: event.target.value === "" ? 0 : Number(event.target.value),
+                              },
+                            }))}
+                          />
+                        </label>
+                      );
+                    })}
+                    <p className="muted">
+                      Allocated: {totalPointValue(value)} / {form.points_pool}
+                    </p>
+                  </>
+                )}
+                {form.type === "rubric" && (
+                  <div className="likert">
+                    {(form.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                      <label key={label}>
+                        <input
+                          type="radio"
+                          name={`form-${key}`}
+                          disabled={disabled}
+                          checked={value === index + 1}
+                          onChange={() => setValues((current) => ({ ...current, [key]: index + 1 }))}
+                        />
+                        <span>{index + 1}</span>
+                        <small>{label}</small>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {form.type === "contribution" && (
+                  <label>
+                    Contribution index (100 = equal share; 0–200)
+                    <input type="number" min={0} max={200} step={1} disabled={disabled} value={value === "" ? "" : String(value ?? "")} onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value === "" ? "" : Number(event.target.value) }))} />
+                  </label>
+                )}
+                {form.type === "text" && (
+                  <label>
+                    Written response
+                    <textarea rows={4} maxLength={4000} disabled={disabled} value={typeof value === "string" ? value : ""} onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))} />
+                  </label>
+                )}
+                {form.submitted_at && (
+                  <Notice kind="success">
+                    Submitted {new Date(form.submitted_at).toLocaleString()}.
+                  </Notice>
+                )}
+                {validation[key] && <Notice kind="error">{validation[key]}</Notice>}
+                {form.available && !form.submitted_at && (
+                  <Button
+                    type="button"
+                    disabled={form.type === "points" && !form.points_pool}
+                    onClick={() => void submit(form)}
+                  >
+                    Submit response
+                  </Button>
+                )}
+              </article>
+            );
+          })}
+        </section>
+      )) : (
+        <Empty>
+          No self, team, or point-distribution questions are due for this course yet.
+        </Empty>
       )}
     </section>
   );
@@ -2033,7 +2479,7 @@ function ReviewEditor({
   onSuccess: (s: string) => void;
 }) {
   const [detail, setDetail] = useState<Review>(review);
-  const [scores, setScores] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [feedback, setFeedback] = useState("");
   const [validation, setValidation] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -2043,11 +2489,17 @@ function ReviewEditor({
       (r) => {
         setDetail(r);
         setFeedback(r.feedback || "");
-        const saved: Record<string, number> = {};
-        (r.answers || []).forEach(
-          (a) => (saved[String(a.question_id)] = a.score),
-        );
-        setScores(saved);
+        const saved: Record<string, unknown> = {};
+        if (r.responses?.length) {
+          r.responses.forEach((answer) => {
+            saved[String(answer.question_id)] = answer.value;
+          });
+        } else {
+          (r.answers || []).forEach(
+            (answer) => (saved[String(answer.question_id)] = answer.score),
+          );
+        }
+        setAnswers(saved);
         if (r.submission?.questions) setQuestions(r.submission.questions);
         else if (r.assignment_id)
           void run<Assignment>(
@@ -2058,34 +2510,49 @@ function ReviewEditor({
     );
   }, [review.id, run]);
   const submission = detail.submission;
-  const questionsToRate = questions.slice(0, 5);
+  const questionsToRate = questions.filter(
+    (question) =>
+      (question.recipient || "peer") === "peer" &&
+      (question.type || "rubric") !== "points",
+  );
   const submitted = detail.status?.toLowerCase() === "submitted";
   async function save(submit = false) {
     if (submitted) return;
-    if (
-      questionsToRate.length !== 5 ||
-      questionsToRate.some((q) => q.id === undefined)
-    ) {
+    if (!questionsToRate.length || questionsToRate.some((q) => q.id === undefined)) {
       setValidation(
-        "The five questions for this assignment are not available.",
+        "Peer questions for this assignment are not available.",
       );
       return;
     }
-    const answers = questionsToRate.flatMap((q) => {
-      const score = scores[String(q.id)];
-      return score ? [{ question_id: q.id!, score }] : [];
+    const responses = questionsToRate.flatMap((question) => {
+      const value = answers[String(question.id)];
+      if (value === undefined || value === null || value === "") return [];
+      if (typeof value === "string" && !value.trim()) return [];
+      return [{ question_id: question.id!, value }];
     });
-    if (submit && answers.length !== 5) {
-      setValidation(
-        "Choose a rating for each of the five questions before submitting.",
-      );
-      return;
+    if (submit) {
+      const missing = questionsToRate.filter((question) => {
+        const value = answers[String(question.id)];
+        return value === undefined || value === null || value === "" ||
+          (typeof value === "string" && !value.trim());
+      });
+      if (missing.length) {
+        setValidation(`Answer each required peer question before submitting (${missing.length} remaining).`);
+        return;
+      }
+      if (
+        !questionsToRate.some((question) => question.type === "text") &&
+        feedback.trim().length < 10
+      ) {
+        setValidation("Add at least 10 characters of overall feedback before submitting.");
+        return;
+      }
     }
     setValidation("");
     const saved = await run(() =>
       api(`/reviews/${review.id}`, {
         method: "PUT",
-        body: JSON.stringify({ answers, feedback }),
+        body: JSON.stringify({ answers: responses, feedback }),
       }),
     );
     if (saved !== undefined && submit) {
@@ -2130,7 +2597,7 @@ function ReviewEditor({
           </p>
         )}
       </div>
-      <h3>Assessment · five statements</h3>
+      <h3>Peer assessment</h3>
       {detail.revision_note && (
         <Notice>
           Your lecturer requested a revision: {detail.revision_note}
@@ -2141,34 +2608,48 @@ function ReviewEditor({
           This review has been submitted and is read-only.
         </Notice>
       )}
-      {questionsToRate.length !== 5 ? (
-        <Notice>The five assignment questions are not available yet.</Notice>
-      ) : (
-        questionsToRate.map((q, i) => (
-          <div className="criterion" key={String(q.id ?? i)}>
-            <b>{q.prompt}</b>
-            <div className="likert">
-              {SCALE.map((label, n) => (
-                <label key={n}>
-                  <input
-                    type="radio"
-                    name={`q-${q.id}`}
-                    disabled={submitted}
-                    checked={scores[String(q.id)] === n + 1}
-                    onChange={() =>
-                      setScores((v) => ({ ...v, [String(q.id)]: n + 1 }))
-                    }
-                  />
-                  <span>{n + 1}</span>
-                  <small>{label}</small>
-                </label>
-              ))}
-            </div>
+      {!questionsToRate.length ? (
+        <Notice>This review has no peer questions configured.</Notice>
+      ) : questionsToRate.map((question) => {
+        const type = question.type || "rubric";
+        const value = answers[String(question.id)];
+        return (
+          <div className="criterion" key={String(question.id)}>
+            <b>{question.prompt}</b>
+            {type === "rubric" && (
+              <div className="likert">
+                {(question.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                  <label key={label}>
+                    <input
+                      type="radio"
+                      name={`q-${question.id}`}
+                      disabled={submitted}
+                      checked={value === index + 1}
+                      onChange={() => setAnswers((current) => ({ ...current, [String(question.id)]: index + 1 }))}
+                    />
+                    <span>{index + 1}</span>
+                    <small>{label}</small>
+                  </label>
+                ))}
+              </div>
+            )}
+            {type === "contribution" && (
+              <label>
+                Contribution index (100 = equal share; 0–200)
+                <input type="number" min={0} max={200} step={1} disabled={submitted} value={value === undefined ? "" : String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value === "" ? "" : Number(event.target.value) }))} />
+              </label>
+            )}
+            {type === "text" && (
+              <label>
+                Written response
+                <textarea rows={4} maxLength={4000} disabled={submitted} value={typeof value === "string" ? value : ""} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value }))} />
+              </label>
+            )}
           </div>
-        ))
-      )}
+        );
+      })}
       <label>
-        Written feedback
+        Overall feedback
         <textarea
           rows={5}
           disabled={submitted}
@@ -2177,8 +2658,7 @@ function ReviewEditor({
         />
       </label>
       <p className="muted">
-        Add at least 10 characters of written feedback to submit. You can save a
-        draft before it is complete.
+        Provide constructive, specific feedback. Overall feedback is required when the rubric has no written-response question. Drafts can be saved before completing the rubric.
       </p>
       {validation && <Notice kind="error">{validation}</Notice>}
       <div className="action-row">
@@ -2189,13 +2669,13 @@ function ReviewEditor({
       <div className="action-row">
         <Button
           className="secondary"
-          disabled={submitted || questionsToRate.length !== 5}
+          disabled={submitted || !questionsToRate.length}
           onClick={() => void save(false)}
         >
           Save draft
         </Button>
         <Button
-          disabled={submitted || questionsToRate.length !== 5}
+          disabled={submitted || !questionsToRate.length}
           onClick={() => void save(true)}
         >
           Submit review
