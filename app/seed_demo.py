@@ -17,9 +17,13 @@ def bootstrap(username, password):
     with get_connection() as c:
         if c.execute("SELECT 1 FROM users WHERE role='instructor'").fetchone():
             raise SystemExit("An instructor already exists; refusing bootstrap.")
-        c.execute(
+        instructor_id = c.execute(
             "INSERT INTO users(username,password_hash,role) VALUES(?,?,'instructor')",
             (username.lower(), hashing.hash(password)),
+        ).lastrowid
+        c.execute(
+            "INSERT OR IGNORE INTO course_instructors(course_id,instructor_id) SELECT id,? FROM courses WHERE created_by IS NULL",
+            (instructor_id,),
         )
     print(f"Instructor account created: {username}")
 
@@ -35,6 +39,9 @@ def seed():
                 "Target database is not empty; refusing to overwrite existing data."
             )
         c.execute("BEGIN IMMEDIATE")
+        course_id = c.execute(
+            "SELECT id FROM courses WHERE code='DEMO' ORDER BY id LIMIT 1"
+        ).fetchone()[0]
         people = [(f"demo-{i:02d}", f"Demo Student {i:02d}") for i in range(1, 11)]
         credentials = {}
         for sid, name in people:
@@ -44,8 +51,13 @@ def seed():
                 "INSERT INTO users(username,password_hash,role,student_id,must_change_password) VALUES(?,?, 'student', ?,0)",
                 (sid, hashing.hash(credentials[sid]), sid),
             )
+            c.execute(
+                "INSERT INTO course_students(course_id,student_id) VALUES(?,?)",
+                (course_id, sid),
+            )
         aid = c.execute(
-            "INSERT INTO assignments(title,instructions,due_at) VALUES('Synthetic peer review','Demo data only; no real learner information.','2099-12-31T23:59:00Z')"
+            "INSERT INTO assignments(title,instructions,due_at,course_id) VALUES('Synthetic peer review','Demo data only; no real learner information.','2099-12-31T23:59:00Z',?)",
+            (course_id,),
         ).lastrowid
         prompts = [
             "The submission demonstrates a clear understanding of the topic.",

@@ -181,6 +181,43 @@ select:focus-visible {
   color: #596474;
   font-size: 11px;
 }
+.account-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.account-type {
+  border-radius: 20px;
+  padding: 5px 9px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.account-type.instructor {
+  background: #fff3eb;
+  color: #b95724;
+}
+.account-type.student {
+  background: #edf4e9;
+  color: #4e6d3e;
+}
+.account-name {
+  color: #596474;
+  font-size: 11px;
+  font-weight: 600;
+}
+.account-signout {
+  border: 1px solid #dedfdc;
+  background: #fff;
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: #354154;
+  font-size: 11px;
+  font-weight: 600;
+}
+.account-signout:hover {
+  border-color: #ef762e;
+  color: #b95724;
+}
 .sandbox-pill {
   background: #f2f5ed;
   color: #597346;
@@ -383,6 +420,81 @@ label {
 .form-grid .button {
   justify-self: start;
 }
+.question-list {
+  display: grid;
+  gap: 12px;
+}
+.question-card {
+  border: 1px solid #e8e8e4;
+  border-radius: 9px;
+  padding: 16px;
+  background: #fffefa;
+  display: grid;
+  gap: 13px;
+}
+.question-card .panel-heading {
+  margin: 0;
+  flex-wrap: wrap;
+}
+.question-card .panel-heading h3 {
+  margin: 0;
+}
+.question-card .action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+.question-settings {
+  align-items: start;
+}
+.question-options {
+  display: grid;
+  gap: 8px;
+}
+.question-options .panel-heading {
+  justify-content: space-between;
+}
+.question-option {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+.question-option label {
+  flex: 1;
+}
+.question-add-row {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.question-add-row label {
+  min-width: 220px;
+}
+.student-form-assignment {
+  margin-top: 20px;
+}
+.student-form-assignment > h3 {
+  margin: 0;
+}
+.student-form-assignment > small {
+  display: block;
+  color: #8b95a1;
+  margin: 5px 0 12px;
+  font-size: 10px;
+}
+.point-allocation-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0ed;
+}
+.point-allocation-row input {
+  width: 100px;
+}
 .empty-state {
   border: 1px dashed #e2e2dc;
   background: #fdfcf9;
@@ -449,6 +561,78 @@ label {
   margin: 4px 0 0;
   font-size: 10px;
 }
+.student-assignment .button {
+  flex: 0 0 auto;
+}
+.submission-fields {
+  display: grid;
+  gap: 14px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.submission-fields:disabled {
+  opacity: 0.75;
+}
+.group-card {
+  border: 1px solid #ecece8;
+  border-radius: 9px;
+  padding: 16px;
+  margin-top: 13px;
+  background: #fffefa;
+}
+.group-card .panel-heading {
+  margin-bottom: 12px;
+}
+.group-card h3 {
+  margin: 0;
+}
+.group-card .muted {
+  margin: 5px 0 0;
+}
+.group-card .action-row {
+  margin-top: 0;
+}
+.group-members {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border-top: 1px solid #efefeb;
+}
+.group-members li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 2px;
+  border-bottom: 1px solid #f0f0ed;
+}
+.group-members li > span,
+.group-members li small {
+  display: block;
+}
+.group-members li b {
+  font-size: 12px;
+  color: #394352;
+}
+.group-members li small {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #8b95a1;
+}
+.group-assign-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+.group-assign-row label {
+  flex: 1;
+}
+.group-assign-row select {
+  width: 100%;
+}
 .action-row {
   margin-top: 16px;
 }
@@ -477,6 +661,38 @@ label {
 .moderation-card small {
   color: #929aa5;
   font-size: 10px;
+}
+.submitted-review-card {
+  padding: 18px;
+}
+.submitted-review-card .panel-heading {
+  margin-bottom: 12px;
+}
+.submitted-review-card h3 {
+  margin: 18px 0 8px;
+}
+.submitted-review-score {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 9px 0;
+  margin: 0;
+  border-bottom: 1px solid #f0f0ed;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.submitted-review-score b {
+  flex: 0 0 auto;
+  color: #394352;
+}
+.review-feedback {
+  white-space: pre-wrap;
+  color: #596474;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.revision-request {
+  margin-top: 16px;
 }
 .review-heading {
   display: flex;
@@ -619,9 +835,13 @@ label {
     border-bottom: 1px solid #ecebe7;
   }
   .workspace-label,
-  .course-switch,
   .sidebar-bottom {
     display: none;
+  }
+  .course-switch {
+    display: block;
+    margin-top: 8px;
+    padding: 8px 10px;
   }
   .main-nav {
     display: flex;
@@ -639,8 +859,24 @@ label {
     margin-left: 0;
   }
   .topbar {
-    height: 48px;
-    padding: 0 16px;
+    min-height: 52px;
+    height: auto;
+    padding: 7px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .account-controls {
+    gap: 7px;
+  }
+  .account-name {
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account-signout {
+    padding: 6px 8px;
+    font-size: 10px;
   }
   .content-wrap {
     padding: 24px 15px;
@@ -686,6 +922,13 @@ label {
   .list-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .group-assign-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .group-members li {
+    align-items: flex-start;
   }
   .main-footer {
     padding: 11px 15px;

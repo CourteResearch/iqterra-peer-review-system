@@ -1,4 +1,4 @@
-from app.allocation import allocate_reviews
+from app.allocation import allocate_group_reviews, allocate_reviews
 
 
 def test_no_self_allocation_or_reciprocal_pairs():
@@ -46,11 +46,16 @@ def test_each_submission_receives_exactly_three_distinct_reviewers():
         ), f"{submission} should have 3 distinct reviewers"
 
 
-def test_too_few_students_rejected():
+def test_two_students_receive_one_reciprocal_review_each():
+    assignments = allocate_reviews(["a", "b"], 1)
+    assert set(assignments) == {("a", "b"), ("b", "a")}
+
+
+def test_one_student_rejected():
     try:
-        allocate_reviews(["a", "b"], 1)
+        allocate_reviews(["a"], 1)
     except ValueError as exc:
-        assert "At least 3 students" in str(exc)
+        assert "At least 2 students" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
 
@@ -64,3 +69,40 @@ def test_invalid_review_count_rejected():
         assert "reviewers_per_submission" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_group_members_can_review_without_submitting():
+    allocations = allocate_group_reviews(
+        ["s1", "s2", "s3", "s4"],
+        [("s1", 101), ("s2", 102)],
+        2,
+    )
+    assert len(allocations) == 4
+    assert all(reviewer != ("s1" if submission == 101 else "s2")
+               for reviewer, submission in allocations)
+    assert {reviewer for reviewer, _ in allocations} <= {"s1", "s2", "s3", "s4"}
+    assert any(reviewer in {"s3", "s4"} for reviewer, _ in allocations)
+
+
+def test_group_allocation_rejects_missing_teammate_reviewers():
+    try:
+        allocate_group_reviews(["s1", "s2"], [("s1", 101)], 2)
+    except ValueError as exc:
+        assert "enough other group members" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_three_person_group_can_have_each_teammate_review_every_other():
+    allocations = allocate_group_reviews(
+        ["s1", "s2", "s3"],
+        [("s1", 101), ("s2", 102), ("s3", 103)],
+        2,
+    )
+    assert len(allocations) == 6
+    for student_id, submission_id in (("s1", 101), ("s2", 102), ("s3", 103)):
+        reviewers = {
+            reviewer for reviewer, submission in allocations
+            if submission == submission_id
+        }
+        assert reviewers == {"s1", "s2", "s3"} - {student_id}
