@@ -24,7 +24,8 @@ Instructors can inspect submitted peer reviews from **Submitted reviews**, filte
 
 - **All active application data is local:** SQLite is stored at `data/iqterra.sqlite3` by default, and submission files are stored in `data/uploads/`. Docker Compose bind-mounts `data/` so those files remain on the computer running Docker.
 - The original `iqt02.db` at the project root is the untouched starter/reference database. The running application uses the separate active database under `data/`.
-- Manus-managed database stays disabled. Do not publish this SQLite version as a durable cloud database: the WebDev published container's writable filesystem is temporary. For reliable hosted multi-instance production use, a later persistent database/storage decision is required.
+
+
 - **Moodle is not connected.** This project does not have a Moodle URL, LTI registration, roster credentials, or grade-passback configuration. The app will not claim a live Moodle connection or send scores to Moodle. Moodle integration is a separate future configuration/implementation.
 - The download bundle includes the database and uploaded files, which may contain student information if you add real data. Store and share that ZIP securely; never include `.env` or plaintext credentials. Demo/bootstrap passwords are kept in a separate private handout and should not be posted publicly.
 
