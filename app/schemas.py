@@ -8,8 +8,14 @@ class Login(BaseModel):
 
 
 class StudentIn(BaseModel):
-    username: str
+    username: str | None = None
+    email: str | None = None
     display_name: str
+
+
+class BulkStudentsIn(BaseModel):
+    students: list[StudentIn] = Field(min_length=1, max_length=500)
+    skip_existing: bool = False
 
 
 class CourseIn(BaseModel):
@@ -21,6 +27,7 @@ class CourseIn(BaseModel):
 
 class StudentUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
+    email: str | None = None
 
 
 class CourseInstructorIn(BaseModel):

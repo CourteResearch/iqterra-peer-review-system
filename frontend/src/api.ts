@@ -30,7 +30,16 @@ export type Question = {
   order: number;
   type?: "rubric" | "text" | "contribution" | "points";
   recipient?: "peer" | "self" | "team";
-  settings?: { labels?: string[]; points_per_peer?: number; max_length?: number };
+  settings?: {
+    labels?: string[];
+    criteria?: { id: string; name: string; descriptions: string[] }[];
+    points_per_peer?: number;
+    points_pool?: number;
+    include_self?: boolean;
+    max_length?: number;
+    details?: string;
+    visibility?: "instructor_only" | "team_named" | "recipient_anonymous";
+  };
 };
 export type Template = { id?: number | string; prompt: string; title?: string };
 export type Assignment = {
@@ -80,6 +89,7 @@ export type Review = {
   due_at?: string;
   answers?: { question_id: number | string; score: number }[];
   responses?: { question_id: number | string; value: unknown }[];
+  submitted_question_ids?: (number | string)[];
   feedback?: string;
   revision_note?: string | null;
 };
@@ -120,6 +130,19 @@ export type AssignmentForm = {
   value: unknown;
   submitted_at?: string | null;
 };
+export type StudentFeedback = {
+  assignment_title: string;
+  submission_title?: string | null;
+  question_id: number | string;
+  prompt: string;
+  type: Question["type"];
+  details?: string;
+  settings?: Question["settings"];
+  visibility: "team_named" | "recipient_anonymous";
+  respondent: string;
+  value: unknown;
+  submitted_at: string;
+};
 export type OverviewData = {
   assignment?: Assignment;
   question_outcomes?: {
@@ -159,8 +182,12 @@ export type ModerationItem = {
   answers?: { question_id: number | string; score: number }[];
   responses?: { question_id: number | string; value: unknown }[];
 };
-export type Student = { id: number | string; username: string; display_name: string };
-export type StudentCreated = Student & { one_time_credential: string; must_change_password: true };
+export type Student = { id: number | string; username: string; email?: string | null; display_name: string };
+export type StudentCreated = Student & {
+  one_time_credential: string | null;
+  invitation_sent?: boolean | null;
+  must_change_password: true;
+};
 export type PasswordChangeResponse = { ok: true; user: User };
 const BASE = "/api";
 export class ApiError extends Error {
@@ -170,6 +197,31 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
+}
+function errorMessage(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (Array.isArray(value)) {
+    const messages = value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item !== "object" || item === null) return undefined;
+        const detail = item as { msg?: unknown; loc?: unknown };
+        if (typeof detail.msg !== "string") return undefined;
+        const location = Array.isArray(detail.loc)
+          ? detail.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".")
+          : "";
+        return location && location !== "body"
+          ? `${location}: ${detail.msg}`
+          : detail.msg;
+      })
+      .filter((message): message is string => Boolean(message));
+    if (messages.length) return messages.join("; ");
+  }
+  if (typeof value === "object" && value !== null) {
+    const detail = value as { detail?: unknown; message?: unknown };
+    return errorMessage(detail.detail) || errorMessage(detail.message);
+  }
+  return undefined;
 }
 export function getToken() {
   return sessionStorage.getItem("iqt_token");
@@ -196,7 +248,7 @@ export async function api<T>(
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(
-      body?.detail || body?.message || `Request failed (${response.status})`,
+      errorMessage(body) || `Request failed (${response.status})`,
       response.status,
     );
   }

@@ -3,6 +3,11 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_DIR / ".env", override=False)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,7 +17,6 @@ from app.database import init_db
 from app.routers import assignments, auth, courses, exports, groups, misc, overview, reviews, students
 
 BASE_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = BASE_DIR.parent
 INDEX_FILE = PROJECT_DIR / "frontend" / "dist" / "index.html"
 if not INDEX_FILE.exists():
     INDEX_FILE = BASE_DIR / "static" / "index.html"

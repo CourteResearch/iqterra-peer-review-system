@@ -1,4 +1,4 @@
-import os, secrets, tempfile, zipfile, shutil
+import os, secrets, tempfile, zipfile, shutil, hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -18,6 +18,7 @@ from app.security import (
     due_passed,
 )
 from app.schemas import Login, PasswordChange
+from pydantic import BaseModel
 
 router = APIRouter()
 ph = PasswordHash.recommended()
@@ -28,6 +29,11 @@ PROMPTS = [
     "The structure and writing are clear.",
     "The work offers thoughtful or original insight.",
 ]
+
+
+class InvitationAccept(BaseModel):
+    token: str
+    password: str
 
 
 @router.post("/api/auth/login")
@@ -45,7 +51,7 @@ def login(x: Login):
     )
     with database.get_connection() as c:
         row = c.execute(
-            "SELECT u.*,s.display_name FROM users u LEFT JOIN students s ON s.id=u.student_id WHERE u.id=?",
+            "SELECT u.*,s.display_name,s.email FROM users u LEFT JOIN students s ON s.id=u.student_id WHERE u.id=?",
             (r["id"],),
         ).fetchone()
     return {
@@ -59,6 +65,33 @@ def login(x: Login):
 @router.get("/api/auth/me")
 def me(u=Depends(current_user)):
     return user_payload(u)
+
+
+@router.post("/api/auth/accept-invitation")
+def accept_invitation(x: InvitationAccept):
+    if len(x.password) < 12:
+        raise HTTPException(422, "Password must be at least 12 characters")
+    token_hash = hashlib.sha256(x.token.encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    with database.transaction(immediate=True) as c:
+        invitation = c.execute(
+            """
+            SELECT token_hash,student_id FROM student_invitations
+            WHERE token_hash=? AND used_at IS NULL AND expires_at>?
+            """,
+            (token_hash, now),
+        ).fetchone()
+        if not invitation:
+            raise HTTPException(400, "This invitation link is invalid or has expired")
+        c.execute(
+            "UPDATE users SET password_hash=?,must_change_password=0 WHERE student_id=?",
+            (ph.hash(x.password), invitation["student_id"]),
+        )
+        c.execute(
+            "UPDATE student_invitations SET used_at=? WHERE token_hash=?",
+            (now, token_hash),
+        )
+    return {"ok": True}
 
 
 @router.post("/api/auth/password")

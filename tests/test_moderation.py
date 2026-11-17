@@ -1,4 +1,5 @@
 import io
+import json
 import sqlite3
 import pytest
 from fastapi.testclient import TestClient
@@ -177,13 +178,28 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
             "order": 1,
             "type": "rubric",
             "recipient": "peer",
-            "settings": {"labels": ["Developing", "Capable", "Strong", "Excellent"]},
+            "settings": {
+                "labels": ["Developing", "Capable", "Strong", "Excellent"],
+                "criteria": [
+                    {
+                        "id": "quality",
+                        "name": "Quality of work",
+                        "descriptions": [
+                            "Needs substantial improvement",
+                            "Developing",
+                            "Strong",
+                            "Excellent and consistent",
+                        ],
+                    }
+                ],
+            },
         },
         {
             "prompt": "What should this teammate start doing?",
             "order": 2,
             "type": "text",
             "recipient": "peer",
+            "settings": {"visibility": "recipient_anonymous"},
         },
         {
             "prompt": "How much did this teammate contribute?",
@@ -196,13 +212,14 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
             "order": 4,
             "type": "points",
             "recipient": "peer",
-            "settings": {"points_per_peer": 10},
+            "settings": {"points_pool": 100, "include_self": True},
         },
         {
             "prompt": "What did you learn from your team?",
             "order": 5,
             "type": "text",
             "recipient": "self",
+            "settings": {"visibility": "team_named"},
         },
         {
             "prompt": "How well did the team work together?",
@@ -210,6 +227,13 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
             "type": "rubric",
             "recipient": "team",
             "settings": {"labels": ["Needs work", "Adequate", "Good", "Excellent"]},
+        },
+        {
+            "prompt": "What should only the instructor know?",
+            "order": 7,
+            "type": "text",
+            "recipient": "peer",
+            "settings": {"visibility": "instructor_only"},
         },
     ]
     created = c.post(
@@ -227,11 +251,51 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
     assignment = created.json()
     assignment_id = assignment["id"]
     assert [question["type"] for question in assignment["questions"]] == [
-        "rubric", "text", "contribution", "points", "text", "rubric"
+        "rubric", "text", "contribution", "points", "text", "rubric", "text"
     ]
     assert assignment["questions"][0]["settings"]["labels"] == [
         "Developing", "Capable", "Strong", "Excellent"
     ]
+    invalid_pool = c.post(
+        "/api/assignments",
+        json={
+            "title": "Invalid point pool",
+            "course_id": course_id,
+            "due_at": "2099-01-01T00:00:00Z",
+            "questions": [
+                {"prompt": "Peer rating", "order": 1, "type": "rubric"},
+                {
+                    "prompt": "Point distribution",
+                    "order": 2,
+                    "type": "points",
+                    "recipient": "peer",
+                    "settings": {"points_pool": 99},
+                },
+            ],
+        },
+        headers=instructor,
+    )
+    assert invalid_pool.status_code == 422
+    self_excluded_pool = c.post(
+        "/api/assignments",
+        json={
+            "title": "Self-excluded point pool",
+            "course_id": course_id,
+            "due_at": "2099-01-01T00:00:00Z",
+            "questions": [
+                {"prompt": "Peer rating", "order": 1, "type": "rubric"},
+                {
+                    "prompt": "Point distribution",
+                    "order": 2,
+                    "type": "points",
+                    "recipient": "peer",
+                    "settings": {"points_pool": 100, "include_self": False},
+                },
+            ],
+        },
+        headers=instructor,
+    )
+    assert self_excluded_pool.status_code == 422
 
     manual = [
         {"student_id": "s1", "reviewer_ids": ["s2"]},
@@ -255,20 +319,23 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
     assert s1_assignment_form.status_code == 200
     forms = {item["type"] + ":" + item["recipient"]: item
              for item in s1_assignment_form.json()["items"]}
-    assert forms["points:peer"]["points_pool"] == 20
+    assert forms["points:peer"]["points_pool"] == 100
+    assert {peer["id"] for peer in forms["points:peer"]["eligible_peers"]} == {
+        "s1", "s2", "s3"
+    }
     points_question_id = forms["points:peer"]["id"]
     self_question_id = forms["text:self"]["id"]
     team_question_id = forms["rubric:team"]["id"]
 
     bad_points = c.put(
         f"/api/my/assignment-forms/{points_question_id}",
-        json={"value": {"s2": 9, "s3": 10}},
+        json={"value": {"s2": 50, "s3": 50}},
         headers=students["s1"],
     )
     assert bad_points.status_code == 422
     good_points = c.put(
         f"/api/my/assignment-forms/{points_question_id}",
-        json={"value": {"s2": 10, "s3": 10}},
+        json={"value": {"s1": 25, "s2": 35, "s3": 40}},
         headers=students["s1"],
     )
     assert good_points.status_code == 200
@@ -289,6 +356,19 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
     shared_team_answer = next(item for item in team_seen if item["id"] == team_question_id)
     assert shared_team_answer["value"] == 3
     assert shared_team_answer["submitted_at"]
+    feedback_for_teammate = c.get(
+        f"/api/my/feedback?course_id={course_id}", headers=students["s2"]
+    )
+    assert feedback_for_teammate.status_code == 200
+    named_team_feedback = next(
+        item for item in feedback_for_teammate.json()["items"]
+        if item["question_id"] == self_question_id
+        and item["respondent"] == "s1"
+    )
+    assert named_team_feedback["value"] == "I learned to break down project tasks."
+    assert c.get(
+        f"/api/my/feedback?course_id={course_id}", headers=students["s1"]
+    ).status_code == 200
     assert c.put(
         f"/api/my/assignment-forms/{team_question_id}",
         json={"value": 4},
@@ -305,14 +385,43 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
         f"/api/reviews/{s1_allocation}",
         json={
             "answers": [
-                {"question_id": assignment["questions"][0]["id"], "value": 4},
+                {
+                    "question_id": assignment["questions"][0]["id"],
+                    "value": {"quality": 4},
+                },
                 {"question_id": assignment["questions"][1]["id"], "value": "Start sharing progress earlier."},
                 {"question_id": assignment["questions"][2]["id"], "value": 125},
+                {"question_id": assignment["questions"][6]["id"], "value": "Confidential instructor note."},
             ],
         },
         headers=students["s1"],
     )
     assert saved.status_code == 200, saved.text
+    incomplete_matrix = c.put(
+        f"/api/reviews/{s1_allocation}",
+        json={
+            "answers": [
+                {"question_id": assignment["questions"][0]["id"], "value": {}},
+            ],
+        },
+        headers=students["s1"],
+    )
+    assert incomplete_matrix.status_code == 422
+    question_submit = c.post(
+        f"/api/reviews/{s1_allocation}/answers/{assignment['questions'][0]['id']}/submit",
+        headers=students["s1"],
+    )
+    assert question_submit.status_code == 200
+    changed_submitted_answer = c.put(
+        f"/api/reviews/{s1_allocation}",
+        json={
+            "answers": [
+                {"question_id": assignment["questions"][0]["id"], "value": {"quality": 3}},
+            ],
+        },
+        headers=students["s1"],
+    )
+    assert changed_submitted_answer.status_code == 409
     assert c.post(
         f"/api/reviews/{s1_allocation}/submit", headers=students["s1"]
     ).status_code == 200
@@ -320,9 +429,25 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
         f"/api/reviews/{s1_allocation}", headers=students["s1"]
     ).json()
     values = {item["question_id"]: item["value"] for item in detail["responses"]}
-    assert values[assignment["questions"][0]["id"]] == 4
+    assert values[assignment["questions"][0]["id"]] == {"quality": 4}
     assert values[assignment["questions"][1]["id"]] == "Start sharing progress earlier."
     assert values[assignment["questions"][2]["id"]] == 125
+    assert assignment["questions"][0]["id"] in detail["submitted_question_ids"]
+    received = c.get(
+        f"/api/my/feedback?course_id={course_id}", headers=students["s3"]
+    )
+    assert received.status_code == 200
+    received_items = received.json()["items"]
+    anonymous_peer_feedback = next(
+        item for item in received_items
+        if item["prompt"] == "What should this teammate start doing?"
+    )
+    assert anonymous_peer_feedback["respondent"] == "Anonymous teammate"
+    assert anonymous_peer_feedback["value"] == "Start sharing progress earlier."
+    assert not any(
+        item["prompt"] == "What should only the instructor know?"
+        for item in received_items
+    )
     outcomes = c.get(
         f"/api/overview?assignment_id={assignment_id}", headers=instructor
     )
@@ -330,12 +455,17 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
     outcomes_by_id = {
         item["question_id"]: item for item in outcomes.json()["question_outcomes"]
     }
+    matrix_outcome = outcomes_by_id[assignment["questions"][0]["id"]]
+    assert matrix_outcome["average_score"] == 4
+    assert matrix_outcome["distribution"]["4"] == 1
+    assert matrix_outcome["response_details"][0]["value"] == {"quality": 4}
     assert outcomes_by_id[assignment["questions"][1]["id"]]["response_details"][0][
         "value"
     ] == "Start sharing progress earlier."
     assert outcomes_by_id[points_question_id]["response_details"][0]["value"] == {
-        "s2": 10,
-        "s3": 10,
+        "s1": 25,
+        "s2": 35,
+        "s3": 40,
     }
     assert outcomes_by_id[self_question_id]["response_details"][0]["value"] == (
         "I learned to break down project tasks."
@@ -347,7 +477,31 @@ def test_flexible_question_formats_team_forms_and_peer_reviews(setup):
     with database.get_connection() as db:
         assert db.execute(
             "SELECT COUNT(*) FROM question_answers"
-        ).fetchone()[0] == 3
+        ).fetchone()[0] == 4
+
+
+def test_unanswered_legacy_point_questions_upgrade_to_fixed_self_inclusive_pool(setup):
+    _, aid, _, _ = setup
+    with database.get_connection() as db:
+        question_id = db.execute(
+            """
+            INSERT INTO questions(
+                assignment_id,prompt,question_order,question_type,recipient,settings
+            ) VALUES(?,?,6,'points','peer',?)
+            """,
+            (aid, "Distribute team points", '{"points_per_peer":10}'),
+        ).lastrowid
+        db.execute("DELETE FROM schema_migrations WHERE version=12")
+        db.execute("DROP TABLE question_answer_submissions")
+
+    database.init_db()
+    with database.get_connection() as db:
+        settings = json.loads(
+            db.execute("SELECT settings FROM questions WHERE id=?", (question_id,)).fetchone()["settings"]
+        )
+    assert settings["points_pool"] == 100
+    assert settings["include_self"] is True
+    assert "points_per_peer" not in settings
 
 
 def test_question_answer_migration_preserves_existing_ratings(setup):
@@ -365,7 +519,8 @@ def test_question_answer_migration_preserves_existing_ratings(setup):
             "INSERT INTO review_answers(review_id,question_id,score) VALUES(?,?,4)",
             (review_id, question_id),
         )
-        db.execute("DELETE FROM schema_migrations WHERE version IN (10,11)")
+        db.execute("DELETE FROM schema_migrations WHERE version IN (10,11,12)")
+        db.execute("DROP TABLE question_answer_submissions")
         db.execute("DROP TABLE question_answers")
         db.execute("DROP TABLE assignment_form_answers")
 

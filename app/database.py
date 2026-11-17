@@ -1,5 +1,6 @@
 """Versioned SQLite persistence for the standalone peer-review application."""
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -63,9 +64,16 @@ def init_db():
         con.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        version = con.execute(
-            "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
-        ).fetchone()[0]
+        applied_versions = {
+            row["version"] for row in con.execute("SELECT version FROM schema_migrations")
+        }
+        version = max(applied_versions, default=0)
+        first_gap = next(
+            (number for number in range(1, version + 1) if number not in applied_versions),
+            None,
+        )
+        if first_gap is not None and len(applied_versions) > 1:
+            version = first_gap - 1
         if version < 1:
             con.executescript("""
             CREATE TABLE students(id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -405,3 +413,98 @@ def init_db():
                     BEGIN SELECT RAISE(ABORT,'reciprocal allocation is forbidden'); END;
                 """)
             con.execute("INSERT INTO schema_migrations(version) VALUES(11)")
+            version = 11
+
+        if version < 12:
+            con.execute(
+                """
+                CREATE TABLE question_answer_submissions(
+                    review_id INTEGER NOT NULL,
+                    question_id INTEGER NOT NULL,
+                    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(review_id,question_id),
+                    FOREIGN KEY(review_id,question_id)
+                        REFERENCES question_answers(review_id,question_id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            table_names = {
+                row["name"]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            review_activity_clause = (
+                """
+                  AND NOT EXISTS(
+                    SELECT 1 FROM reviews r
+                    JOIN allocations a ON a.id=r.allocation_id
+                    WHERE a.assignment_id=q.assignment_id
+                  )
+                """
+                if {"reviews", "allocations"} <= table_names
+                else ""
+            )
+            point_questions = con.execute(
+                f"""
+                SELECT q.id,q.assignment_id,q.settings
+                FROM questions q
+                WHERE q.question_type='points'
+                  {review_activity_clause}
+                  AND NOT EXISTS(
+                    SELECT 1 FROM assignment_form_answers fa
+                    WHERE fa.assignment_id=q.assignment_id
+                  )
+                """
+            ).fetchall()
+            for question in point_questions:
+                settings = json.loads(question["settings"])
+                if "points_pool" in settings and settings.get("include_self") is True:
+                    continue
+                settings.pop("points_per_peer", None)
+                settings["points_pool"] = 100
+                settings["include_self"] = True
+                con.execute(
+                    "UPDATE questions SET settings=? WHERE id=?",
+                    (json.dumps(settings), question["id"]),
+                )
+            con.execute("INSERT INTO schema_migrations(version) VALUES(12)")
+        if version < 13:
+            student_columns = {
+                row["name"] for row in con.execute("PRAGMA table_info(students)")
+            }
+            if "email" not in student_columns:
+                con.execute("ALTER TABLE students ADD COLUMN email TEXT")
+            user_columns = {
+                row["name"] for row in con.execute("PRAGMA table_info(users)")
+            }
+            if {"username", "student_id"} <= user_columns:
+                con.execute(
+                    """
+                    UPDATE students
+                    SET email=(
+                        SELECT username FROM users
+                        WHERE users.student_id=students.id AND instr(username, '@') > 1
+                    )
+                    WHERE email IS NULL
+                      AND EXISTS(
+                        SELECT 1 FROM users
+                        WHERE users.student_id=students.id AND instr(username, '@') > 1
+                      )
+                    """
+                )
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_students_email ON students(email COLLATE NOCASE) WHERE email IS NOT NULL"
+            )
+            con.executescript("""
+                CREATE TABLE IF NOT EXISTS student_invitations(
+                    token_hash TEXT PRIMARY KEY,
+                    student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_student_invitations_student
+                    ON student_invitations(student_id);
+            """)
+            con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES(13)")

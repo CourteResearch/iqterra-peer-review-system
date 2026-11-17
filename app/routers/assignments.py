@@ -180,6 +180,7 @@ def assignment_form_questions(c, course_id, student_id, assignment_id=None):
     rows = c.execute(query, params).fetchall()
     result = []
     for row in rows:
+        settings = json.loads(row["settings"])
         if row["recipient"] == "team":
             membership = c.execute(
                 """
@@ -197,12 +198,22 @@ def assignment_form_questions(c, course_id, student_id, assignment_id=None):
             membership = None
             recipient_key = f"student:{student_id}"
             recipient_name = None
-            scope = "student"
+            scope = (
+                "team"
+                if row["question_type"] == "points"
+                and row["group_mode"] == "within_group"
+                else "student"
+            )
+            include_self = (
+                row["question_type"] == "points"
+                and settings.get("include_self", "points_pool" in settings)
+            )
             eligible_rows = c.execute(
                 """
                 SELECT s.id,s.display_name FROM course_students cs
                 JOIN students s ON s.id=cs.student_id
-                WHERE cs.course_id=? AND cs.student_id<>?
+                WHERE cs.course_id=?
+                AND (?=1 OR cs.student_id<>?)
                 AND (
                     ?='course'
                     OR EXISTS(
@@ -218,6 +229,7 @@ def assignment_form_questions(c, course_id, student_id, assignment_id=None):
                 """,
                 (
                     course_id,
+                    int(include_self),
                     student_id,
                     row["group_mode"],
                     student_id,
@@ -227,10 +239,16 @@ def assignment_form_questions(c, course_id, student_id, assignment_id=None):
                 {"id": peer["id"], "name": peer["display_name"]}
                 for peer in eligible_rows
             ]
-        settings = json.loads(row["settings"])
+        if row["question_type"] == "points":
+            settings.setdefault("include_self", "points_pool" in settings)
         available = recipient_key is not None and not due_passed(row["due_at"])
         if row["question_type"] == "points" and not eligible_peers:
             available = False
+        legacy_points_pool = (
+            settings.get("points_per_peer", 10) * len(eligible_peers)
+            if row["question_type"] == "points"
+            else None
+        )
         existing = (
             c.execute(
                 """
@@ -256,9 +274,7 @@ def assignment_form_questions(c, course_id, student_id, assignment_id=None):
             "available": available,
             "eligible_peers": eligible_peers,
             "points_pool": (
-                settings.get("points_per_peer", 10) * len(eligible_peers)
-                if row["question_type"] == "points"
-                else None
+                settings.get("points_pool", legacy_points_pool)
             ),
             "value": json.loads(existing["answer_json"]) if existing else None,
             "submitted_at": existing["submitted_at"] if existing else None,
@@ -352,7 +368,7 @@ def submit_assignment_form(
             ):
                 raise HTTPException(
                     422,
-                    f"Distribute exactly {form['points_pool']} whole points among the listed teammates",
+                    f"Distribute exactly {form['points_pool']} whole points among the listed recipients",
                 )
         else:
             value = validate_answer(question, x.value)

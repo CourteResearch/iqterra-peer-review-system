@@ -16,6 +16,7 @@ def user_payload(row):
     return {
         "id": row["id"],
         "username": row["username"],
+        "email": row["email"] if "email" in row.keys() else None,
         "role": row["role"],
         "display_name": (
             row["display_name"] if "display_name" in row.keys() else row["username"]
@@ -34,7 +35,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
         )
         with database.get_connection() as c:
             row = c.execute(
-                "SELECT u.*,s.display_name FROM users u LEFT JOIN students s ON s.id=u.student_id WHERE u.id=?",
+                "SELECT u.*,s.display_name,s.email FROM users u LEFT JOIN students s ON s.id=u.student_id WHERE u.id=?",
                 (data.get("sub"),),
             ).fetchone()
         if not row or not row["is_active"]:

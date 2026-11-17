@@ -148,6 +148,120 @@ def review_responses(c, review_id):
     ]
 
 
+@router.get("/api/my/feedback")
+def my_feedback(course_id: int, u=Depends(student)):
+    with database.get_connection() as c:
+        require_course_access(c, course_id, u, active=True)
+        student_id = u["student_id"]
+        items = []
+        peer_rows = c.execute(
+            """
+            SELECT ass.title assignment_title,s.title submission_title,
+                   q.id question_id,q.prompt,q.question_type,q.settings,
+                   qa.answer_json,reviewer.display_name reviewer_name,
+                   answer_submission.submitted_at
+            FROM reviews r
+            JOIN allocations a ON a.id=r.allocation_id
+            JOIN assignments ass ON ass.id=a.assignment_id
+            JOIN submissions s ON s.id=a.submission_id
+            JOIN students reviewer ON reviewer.id=a.reviewer_id
+            JOIN question_answers qa ON qa.review_id=r.id
+            JOIN question_answer_submissions answer_submission
+              ON answer_submission.review_id=qa.review_id
+             AND answer_submission.question_id=qa.question_id
+            JOIN questions q ON q.id=qa.question_id
+            WHERE ass.course_id=? AND s.student_id=?
+              AND q.recipient='peer'
+            ORDER BY r.submitted_at DESC,q.question_order
+            """,
+            (course_id, student_id),
+        ).fetchall()
+        for row in peer_rows:
+            settings = json.loads(row["settings"])
+            visibility = settings.get("visibility", "instructor_only")
+            if visibility not in {"team_named", "recipient_anonymous"}:
+                continue
+            items.append(
+                {
+                    "assignment_title": row["assignment_title"],
+                    "submission_title": row["submission_title"],
+                    "question_id": row["question_id"],
+                    "prompt": row["prompt"],
+                    "type": row["question_type"],
+                    "details": settings.get("details", ""),
+                    "settings": settings,
+                    "visibility": visibility,
+                    "respondent": (
+                        row["reviewer_name"]
+                        if visibility == "team_named"
+                        else "Anonymous teammate"
+                    ),
+                    "value": json.loads(row["answer_json"]),
+                    "submitted_at": row["submitted_at"],
+                }
+            )
+
+        membership = c.execute(
+            """
+            SELECT g.id FROM course_group_members gm
+            JOIN course_groups g ON g.id=gm.group_id
+            WHERE gm.course_id=? AND gm.student_id=? AND g.is_archived=0
+            """,
+            (course_id, student_id),
+        ).fetchone()
+        if membership:
+            group_id = membership["id"]
+            form_rows = c.execute(
+                """
+                SELECT ass.title assignment_title,q.id question_id,q.prompt,
+                       q.question_type,q.recipient,q.settings,fa.answer_json,
+                       fa.recipient_key,fa.respondent_id,respondent.display_name,
+                       fa.submitted_at
+                FROM assignment_form_answers fa
+                JOIN assignments ass ON ass.id=fa.assignment_id
+                JOIN questions q ON q.id=fa.question_id
+                JOIN students respondent ON respondent.id=fa.respondent_id
+                WHERE ass.course_id=? AND (
+                    (q.recipient='team' AND fa.recipient_key=?)
+                    OR (q.recipient='self' AND fa.respondent_id IN (
+                        SELECT student_id FROM course_group_members
+                        WHERE course_id=? AND group_id=?
+                    ))
+                )
+                ORDER BY fa.submitted_at DESC,q.question_order
+                """,
+                (course_id, f"group:{group_id}", course_id, group_id),
+            ).fetchall()
+            for row in form_rows:
+                settings = json.loads(row["settings"])
+                visibility = settings.get(
+                    "visibility",
+                    "team_named" if row["recipient"] == "self" else "instructor_only",
+                )
+                if visibility not in {"team_named", "recipient_anonymous"}:
+                    continue
+                items.append(
+                    {
+                        "assignment_title": row["assignment_title"],
+                        "submission_title": None,
+                        "question_id": row["question_id"],
+                        "prompt": row["prompt"],
+                        "type": row["question_type"],
+                        "details": settings.get("details", ""),
+                        "settings": settings,
+                        "visibility": visibility,
+                        "respondent": (
+                            row["display_name"]
+                            if visibility == "team_named"
+                            else "Anonymous teammate"
+                        ),
+                        "value": json.loads(row["answer_json"]),
+                        "submitted_at": row["submitted_at"],
+                    }
+                )
+        return {"items": items}
+
+
 @router.get("/api/my/reviews")
 def my_reviews(course_id: int | None = None, u=Depends(student)):
     with database.get_connection() as c:
@@ -230,6 +344,13 @@ def review_get(rid: int, u=Depends(current_user)):
             for z in c.execute("SELECT * FROM review_answers WHERE review_id=?", (rid,))
         ]
         responses = review_responses(c, rid)
+        submitted_question_ids = [
+            row["question_id"]
+            for row in c.execute(
+                "SELECT question_id FROM question_answer_submissions WHERE review_id=?",
+                (rid,),
+            )
+        ]
         return {
             "id": r["allocation_id"] if u["role"] == "student" else rid,
             "status": r["status"],
@@ -255,6 +376,7 @@ def review_get(rid: int, u=Depends(current_user)):
             ),
             "answers": answers,
             "responses": responses,
+            "submitted_question_ids": submitted_question_ids,
             "submission": {
                 "title": sub["title"],
                 "content": sub["content"],
@@ -367,6 +489,24 @@ def review_put(rid: int, x: ReviewDraft, u=Depends(student)):
             else:
                 raise HTTPException(422, "A response value is required")
             value = validate_answer(question, value)
+            existing = c.execute(
+                """
+                SELECT qa.answer_json,submitted.question_id submitted
+                FROM question_answers qa
+                LEFT JOIN question_answer_submissions submitted
+                  ON submitted.review_id=qa.review_id
+                 AND submitted.question_id=qa.question_id
+                WHERE qa.review_id=? AND qa.question_id=?
+                """,
+                (rid, question_id),
+            ).fetchone()
+            encoded_value = json.dumps(value)
+            if (
+                existing
+                and existing["submitted"]
+                and json.loads(existing["answer_json"]) != value
+            ):
+                raise HTTPException(409, "This question's answer has already been submitted")
             c.execute(
                 """
                 INSERT INTO question_answers(review_id,question_id,answer_json)
@@ -374,9 +514,13 @@ def review_put(rid: int, x: ReviewDraft, u=Depends(student)):
                 ON CONFLICT(review_id,question_id)
                 DO UPDATE SET answer_json=excluded.answer_json
                 """,
-                (rid, question_id, json.dumps(value)),
+                (rid, question_id, encoded_value),
             )
-            if question["question_type"] == "rubric" and 1 <= value <= 5:
+            if question["question_type"] == "rubric":
+                if isinstance(value, dict):
+                    score = round(sum(value.values()) / len(value))
+                else:
+                    score = value
                 c.execute(
                     """
                     INSERT INTO review_answers(review_id,question_id,score)
@@ -384,7 +528,7 @@ def review_put(rid: int, x: ReviewDraft, u=Depends(student)):
                     ON CONFLICT(review_id,question_id)
                     DO UPDATE SET score=excluded.score
                     """,
-                    (rid, question_id, value),
+                    (rid, question_id, score),
                 )
             else:
                 c.execute(
@@ -392,6 +536,44 @@ def review_put(rid: int, x: ReviewDraft, u=Depends(student)):
                     (rid, question_id),
                 )
     return {"id": rid, "status": "draft"}
+
+
+@router.post("/api/reviews/{rid}/answers/{question_id}/submit")
+def review_answer_submit(rid: int, question_id: int, u=Depends(student)):
+    with database.transaction(immediate=True) as c:
+        r = review_access(c, rid, u, create=True)
+        rid = (
+            r["id"]
+            or c.execute(
+                "SELECT id FROM reviews WHERE allocation_id=?", (r["allocation_id"],)
+            ).fetchone()[0]
+        )
+        if r["status"] == "submitted":
+            raise HTTPException(409, "Review already submitted")
+        question = c.execute(
+            """
+            SELECT id FROM questions
+            WHERE id=? AND assignment_id=? AND recipient='peer'
+              AND question_type<>'points'
+            """,
+            (question_id, r["assignment_id"]),
+        ).fetchone()
+        if not question:
+            raise HTTPException(422, "Question is not part of this peer review")
+        answer = c.execute(
+            "SELECT 1 FROM question_answers WHERE review_id=? AND question_id=?",
+            (rid, question_id),
+        ).fetchone()
+        if not answer:
+            raise HTTPException(409, "Save an answer before submitting this question")
+        c.execute(
+            """
+            INSERT OR IGNORE INTO question_answer_submissions(review_id,question_id)
+            VALUES(?,?)
+            """,
+            (rid, question_id),
+        )
+    return {"question_id": question_id, "submitted": True}
 
 
 @router.post("/api/reviews/{rid}/submit")
@@ -451,6 +633,13 @@ def review_submit(rid: int, u=Depends(student)):
                 422,
                 "Complete every peer question, required point distribution, and written feedback before submitting",
             )
+        c.execute(
+            """
+            INSERT OR IGNORE INTO question_answer_submissions(review_id,question_id)
+            SELECT review_id,question_id FROM question_answers WHERE review_id=?
+            """,
+            (rid,),
+        )
         c.execute(
             "UPDATE reviews SET status='submitted',submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (rid,),

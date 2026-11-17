@@ -154,8 +154,8 @@ def enroll_student(course_id: int, x: CourseStudentIn, u=Depends(instructor)):
         ).fetchone()
         if not account or account["role"] != "student":
             raise HTTPException(404, "Active student account not found")
-        c.execute(
+        cursor = c.execute(
             "INSERT OR IGNORE INTO course_students(course_id,student_id) VALUES(?,?)",
             (course_id, account["student_id"]),
         )
-        return {"ok": True}
+        return {"ok": True, "already_enrolled": cursor.rowcount == 0}

@@ -16,6 +16,7 @@ import {
   setToken,
   Submission,
   SubmittedReview,
+  StudentFeedback,
   Template,
   User,
   messageOf,
@@ -37,6 +38,7 @@ type Screen =
   | "moderation"
   | "submitted_reviews"
   | "forms"
+  | "feedback"
   | "reviews"
   | "submit";
 const SCALE = [
@@ -68,9 +70,16 @@ function questionResponseText(
   if (value === undefined || value === null) return "Not answered";
   if (question.type === "rubric" || !question.type) {
     const labels = question.settings?.labels || DEFAULT_RUBRIC_LABELS;
-    return typeof value === "number"
-      ? `${value} / ${labels.length} · ${labels[value - 1] || "Rating"}`
-      : String(value);
+    if (typeof value === "number")
+      return `${value} / ${labels.length} · ${labels[value - 1] || "Rating"}`;
+    if (question.settings?.criteria?.length) {
+      const ratings = recordValue(value);
+      return question.settings.criteria.map((criterion) => {
+        const rating = ratings[criterion.id];
+        return `${criterion.name}: ${String(rating)} / ${labels.length} · ${labels[Number(rating) - 1] || "Rating"}`;
+      }).join("; ");
+    }
+    return JSON.stringify(value);
   }
   if (question.type === "contribution")
     return `${String(value)} / 100 equal-share index`;
@@ -86,6 +95,87 @@ function totalPointValue(value: unknown): number {
   return Object.values(recordValue(value)).reduce<number>(
     (sum, point) => sum + (typeof point === "number" ? point : 0),
     0,
+  );
+}
+function hasQuestionResponse(question: Question, value: unknown): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "string") return Boolean(value.trim());
+  if (question.type === "rubric" && question.settings?.criteria?.length) {
+    const ratings = recordValue(value);
+    return question.settings.criteria.every((criterion) => {
+      const rating = ratings[criterion.id];
+      return typeof rating === "number" && rating >= 1 &&
+        rating <= (question.settings?.labels?.length || DEFAULT_RUBRIC_LABELS.length);
+    });
+  }
+  return true;
+}
+function visibilityDescription(
+  visibility?: "instructor_only" | "team_named" | "recipient_anonymous",
+) {
+  if (visibility === "team_named")
+    return "Shared with the recipient (or their team for team-wide questions) and shows who wrote it.";
+  if (visibility === "recipient_anonymous")
+    return "Shared with the recipient (or their team for team-wide questions) without showing the writer's name.";
+  return "Only instructors in this course can see this response.";
+}
+function RubricMatrix({
+  question,
+  value,
+  disabled,
+  onChange,
+}: {
+  question: Pick<Question, "id" | "settings">;
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: Record<string, number>) => void;
+}) {
+  const criteria = question.settings?.criteria || [];
+  const labels = question.settings?.labels || DEFAULT_RUBRIC_LABELS;
+  const ratings: Record<string, number> = Object.fromEntries(
+    Object.entries(recordValue(value)).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number",
+    ),
+  );
+  return (
+    <div className="rubric-matrix-scroll">
+      <table className="rubric-matrix">
+        <thead>
+          <tr>
+            <th>Criteria</th>
+            {labels.map((label, index) => <th key={`${label}-${index}`}>{label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {criteria.map((criterion) => (
+            <tr key={criterion.id}>
+              <th scope="row">
+                <b>{criterion.name}</b>
+                <small>
+                  {typeof ratings[criterion.id] === "number"
+                    ? criterion.descriptions[ratings[criterion.id] - 1] || ""
+                    : ""}
+                </small>
+              </th>
+              {labels.map((label, index) => (
+                <td key={`${criterion.id}-${index}`}>
+                  <label aria-label={`${criterion.name}: ${label}`}>
+                    <input
+                      type="radio"
+                      name={`rubric-${question.id}-${criterion.id}`}
+                      disabled={disabled}
+                      checked={ratings[criterion.id] === index + 1}
+                      onChange={() => onChange({ ...ratings, [criterion.id]: index + 1 })}
+                    />
+                    <span>{index + 1}</span>
+                  </label>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 function Button({
@@ -115,6 +205,7 @@ function Notice({
   );
 }
 export default function App() {
+  const invitationToken = new URLSearchParams(window.location.search).get("invite");
   const [user, setUser] = useState<User | null>(null);
   const [screen, setScreen] = useState<Screen>("overview");
   const [busy, setBusy] = useState(false);
@@ -172,6 +263,7 @@ export default function App() {
     },
     [],
   );
+  if (invitationToken) return <AcceptInvitation token={invitationToken} />;
   if (!user) return <Login onLogin={(u) => setUser(u)} />;
   if (user.must_change_password) return <PasswordChange user={user} onChanged={setUser} onSignOut={signedOut} />;
   const instructor = user.role === "instructor";
@@ -232,7 +324,8 @@ export default function App() {
                 ["submit", "My assignments"],
                 ["forms", "Contribution & reflection"],
                 ["reviews", "Reviews to complete"],
-              ]
+              ["feedback", "Team feedback"],
+            ]
           ).map(([id, label]) => (
             <button
               key={id}
@@ -369,6 +462,8 @@ export default function App() {
             <SubmissionForm run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           ) : screen === "forms" ? (
             <AssignmentForms run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
+          ) : screen === "feedback" ? (
+            <StudentFeedbackView run={run} courseId={selectedCourseId} />
           ) : (
             <MyReviews run={run} courseId={selectedCourseId} onSuccess={setSuccess} />
           )}
@@ -394,11 +489,89 @@ function heading(screen: Screen, instructor: boolean) {
           submitted_reviews: "Submitted reviews",
           moderation: "Moderation",
           forms: "Contribution & reflection",
+          feedback: "Team feedback",
         } as Record<string, string>
       )[screen]
     : screen === "submit"
       ? "My assignments"
-      : "Your peer reviews";
+      : screen === "feedback"
+        ? "Team feedback"
+        : "Your peer reviews";
+}
+function parseBulkStudents(value: string) {
+  value = value.replace(/^\uFEFF/, "");
+  const firstLine = value.split(/\r?\n/, 1)[0] || "";
+  const tabs = (firstLine.match(/\t/g) || []).length;
+  const commas = (firstLine.match(/,/g) || []).length;
+  const delimiter = tabs > 0 && tabs >= commas ? "\t" : ",";
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted) {
+      if (character === '"' && value[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        field += character;
+      }
+    } else if (character === '"' && !field.trim()) {
+      field = "";
+      quoted = true;
+    } else if (character === delimiter) {
+      row.push(field.trim());
+      field = "";
+    } else if (character === "\n" || character === "\r") {
+      if (character === "\r" && value[index + 1] === "\n") index += 1;
+      row.push(field.trim());
+      if (row.some((cell) => cell)) rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += character;
+    }
+  }
+  if (quoted) throw new Error("The CSV contains an unclosed quoted field.");
+  row.push(field.trim());
+  if (row.some((cell) => cell)) rows.push(row);
+  if (!rows.length) throw new Error("Enter at least one student.");
+
+  const header = rows[0].map((cell) =>
+    cell.toLowerCase().replace(/[\s_-]+/g, " ").trim(),
+  );
+  const usernameColumn = header.findIndex((cell) =>
+    ["email", "email address", "username", "user name"].includes(cell),
+  );
+  const nameColumn = header.findIndex((cell) =>
+    ["display name", "name", "full name", "student name"].includes(cell),
+  );
+  const firstNameColumn = header.indexOf("first name");
+  const lastNameColumn = header.indexOf("last name");
+  const hasHeader = usernameColumn >= 0 || nameColumn >= 0;
+  const hasNameColumns =
+    nameColumn >= 0 || (firstNameColumn >= 0 && lastNameColumn >= 0);
+  if (hasHeader && (usernameColumn < 0 || !hasNameColumns))
+    throw new Error("The CSV header must include both a username and a display name column.");
+
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  if (!dataRows.length) throw new Error("The CSV contains a header but no student rows.");
+  if (dataRows.length > 500)
+    throw new Error("You can add up to 500 students at once.");
+  return dataRows.map((cells, index) => {
+    const email = hasHeader ? cells[usernameColumn] : cells[0];
+    const displayName = hasHeader
+      ? nameColumn >= 0
+        ? cells[nameColumn]
+        : [cells[firstNameColumn], cells[lastNameColumn]].filter(Boolean).join(" ")
+      : cells.slice(1).join(delimiter).trim();
+    if (!email || !displayName)
+      throw new Error(`Row ${index + (hasHeader ? 2 : 1)} must contain an email and display name.`);
+    return { email, display_name: displayName };
+  });
 }
 function PasswordChange({ user, onChanged, onSignOut }: { user: User; onChanged: (u: User) => void; onSignOut: () => void }) {
   const [current, setCurrent] = useState("");
@@ -469,7 +642,7 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
         <p>Sign in to your peer-review workspace.</p>
         {error && <Notice kind="error">{error}</Notice>}
         <label>
-          Username
+          Email address or instructor username
           <input
             autoComplete="username"
             required
@@ -488,6 +661,61 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
           />
         </label>
         <Button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
+      </form>
+    </main>
+  );
+}
+function AcceptInvitation({ token }: { token: string }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [accepted, setAccepted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (password.length < 12) {
+      setError("Choose a password with at least 12 characters.");
+      return;
+    }
+    if (password !== confirm) {
+      setError("The passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/auth/accept-invitation", {
+        method: "POST",
+        body: JSON.stringify({ token, password }),
+      });
+      setAccepted(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch (issue) {
+      setError(messageOf(issue));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <main className="login-shell">
+      <form className="login-card" onSubmit={submit}>
+        <div className="brand"><span className="brand-mark">i</span><span><b>iqterra</b><small>peer review</small></span></div>
+        {accepted ? (
+          <>
+            <h1>Password set</h1>
+            <p>Your account is ready. Sign in with your email address and new password.</p>
+            <a className="button" href="/">Continue to sign in</a>
+          </>
+        ) : (
+          <>
+            <h1>Set your student password</h1>
+            <p>This invitation link can only be used once and expires after 24 hours.</p>
+            {error && <Notice kind="error">{error}</Notice>}
+            <label>New password<input type="password" autoComplete="new-password" minLength={12} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+            <label>Confirm password<input type="password" autoComplete="new-password" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+            <Button disabled={busy}>{busy ? "Saving…" : "Set password"}</Button>
+          </>
+        )}
       </form>
     </main>
   );
@@ -1160,7 +1388,7 @@ function Assignments({
           order: i + 1,
           type: "rubric",
           recipient: "peer",
-          settings: { labels: DEFAULT_RUBRIC_LABELS },
+          settings: { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
         })));
       },
     );
@@ -1177,7 +1405,9 @@ function Assignments({
           order: i + 1,
           type: question.type || "rubric",
           recipient: question.recipient || "peer",
-          settings: question.settings || { labels: DEFAULT_RUBRIC_LABELS },
+          settings: question.type === "points"
+            ? { ...question.settings, points_pool: 100, include_self: true }
+            : question.settings || { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
         }))
       : (templates.length ? templates : DEFAULT_RUBRIC_LABELS.map((prompt) => ({ prompt })))
           .map((question, i) => ({
@@ -1185,7 +1415,7 @@ function Assignments({
             order: i + 1,
             type: "rubric",
             recipient: "peer",
-            settings: { labels: DEFAULT_RUBRIC_LABELS },
+            settings: { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" },
           })));
   }
   function addQuestion() {
@@ -1198,16 +1428,42 @@ function Assignments({
         type,
         recipient: type === "points" ? "peer" : "peer",
         settings: type === "rubric"
-          ? { labels: DEFAULT_RUBRIC_LABELS }
+          ? { labels: DEFAULT_RUBRIC_LABELS, criteria: [], details: "", visibility: "instructor_only" }
           : type === "points"
-            ? { points_per_peer: 10 }
-            : {},
+            ? { points_pool: 100, include_self: true, details: "" }
+            : { details: "", visibility: "instructor_only" },
       },
     ]);
   }
   function updateQuestion(index: number, patch: Partial<Question>) {
     setQuestions((current) => current.map((question, i) =>
       i === index ? { ...question, ...patch } : question,
+    ));
+  }
+  function updateQuestionSettings(
+    index: number,
+    settings: NonNullable<Question["settings"]>,
+  ) {
+    setQuestions((current) => current.map((question, i) =>
+      i === index
+        ? {
+            ...question,
+            settings: {
+              ...question.settings,
+              ...settings,
+              ...(settings.labels && question.settings?.criteria
+                ? {
+                    criteria: question.settings.criteria.map((criterion) => ({
+                      ...criterion,
+                      descriptions: settings.labels!.map(
+                        (_, levelIndex) => criterion.descriptions[levelIndex] || "",
+                      ),
+                    })),
+                  }
+                : {}),
+            },
+          }
+        : question,
     ));
   }
   function moveQuestion(index: number, offset: -1 | 1) {
@@ -1337,8 +1593,8 @@ function Assignments({
                           settings: nextType === "rubric"
                             ? { labels: DEFAULT_RUBRIC_LABELS }
                             : nextType === "points"
-                              ? { points_per_peer: 10 }
-                              : {},
+                              ? { points_pool: 100, include_self: true, details: "" }
+                              : { details: "", visibility: "instructor_only" },
                         });
                       }}
                     >
@@ -1361,21 +1617,118 @@ function Assignments({
                     </select>
                   </label>
                 </div>
+                <label>
+                  More details or instructions
+                  <textarea
+                    rows={2}
+                    maxLength={4000}
+                    value={q.settings?.details || ""}
+                    onChange={(event) => updateQuestionSettings(i, { details: event.target.value })}
+                  />
+                </label>
+                {(type === "rubric" || type === "text") && (
+                  <label>
+                    Who can see responses?
+                    <select
+                      value={q.settings?.visibility || (recipient === "self" || recipient === "team" ? "team_named" : "instructor_only")}
+                      onChange={(event) => updateQuestionSettings(i, {
+                        visibility: event.target.value as NonNullable<Question["settings"]>["visibility"],
+                      })}
+                    >
+                      <option value="instructor_only">Only instructors</option>
+                      <option value="team_named">The team, with the writer's name</option>
+                      <option value="recipient_anonymous">Recipient sees it anonymously</option>
+                    </select>
+                  </label>
+                )}
                 {type === "rubric" && (
                   <div className="question-options">
                     <div className="panel-heading">
                       <b>Rating choices ({labels.length}; choose 4 or 5)</b>
-                      {labels.length < 5 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: [...labels, `Level ${labels.length + 1}`] } })}>Add choice</Button>}
+                      {labels.length < 5 && <Button className="secondary" type="button" onClick={() => updateQuestionSettings(i, { labels: [...labels, `Level ${labels.length + 1}`] })}>Add choice</Button>}
                     </div>
                     {labels.map((label, labelIndex) => (
                       <div className="question-option" key={labelIndex}>
                         <label>
                           Choice {labelIndex + 1}
-                          <input value={label} maxLength={80} required onChange={(event) => updateQuestion(i, { settings: { labels: labels.map((value, index) => index === labelIndex ? event.target.value : value) } })} />
+                          <input value={label} maxLength={80} required onChange={(event) => updateQuestionSettings(i, { labels: labels.map((value, index) => index === labelIndex ? event.target.value : value) })} />
                         </label>
-                        {labels.length > 4 && <Button className="secondary" type="button" onClick={() => updateQuestion(i, { settings: { labels: labels.filter((_, index) => index !== labelIndex) } })}>Remove</Button>}
+                        {labels.length > 4 && <Button className="secondary" type="button" onClick={() => updateQuestionSettings(i, { labels: labels.filter((_, index) => index !== labelIndex) })}>Remove</Button>}
                       </div>
                     ))}
+                    <div className="panel-heading">
+                      <b>Rubric criteria</b>
+                      <Button
+                        className="secondary"
+                        type="button"
+                        disabled={(q.settings?.criteria?.length || 0) >= 20}
+                        onClick={() => updateQuestionSettings(i, {
+                          criteria: [
+                            ...(q.settings?.criteria || []),
+                            {
+                              id: `criterion_${Date.now()}`,
+                              name: "",
+                              descriptions: labels.map(() => ""),
+                            },
+                          ],
+                        })}
+                      >
+                        Add criterion
+                      </Button>
+                    </div>
+                    {(q.settings?.criteria || []).map((criterion, criterionIndex) => (
+                      <div className="rubric-criterion-editor" key={criterion.id}>
+                        <div className="question-option">
+                          <label>
+                            Criterion {criterionIndex + 1}
+                            <input
+                              required
+                              maxLength={160}
+                              value={criterion.name}
+                              onChange={(event) => updateQuestionSettings(i, {
+                                criteria: q.settings?.criteria?.map((item, index) => index === criterionIndex
+                                  ? { ...item, name: event.target.value }
+                                  : item),
+                              })}
+                            />
+                          </label>
+                          <Button
+                            className="secondary"
+                            type="button"
+                            onClick={() => updateQuestionSettings(i, {
+                              criteria: q.settings?.criteria?.filter((_, index) => index !== criterionIndex),
+                            })}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                        <div className="rubric-descriptions">
+                          {labels.map((label, labelIndex) => (
+                            <label key={`${criterion.id}-${labelIndex}`}>
+                              {label}
+                              <textarea
+                                rows={2}
+                                maxLength={1000}
+                                value={criterion.descriptions[labelIndex] || ""}
+                                onChange={(event) => updateQuestionSettings(i, {
+                                  criteria: q.settings?.criteria?.map((item, index) => index === criterionIndex
+                                    ? {
+                                        ...item,
+                                        descriptions: labels.map((_, levelIndex) =>
+                                          levelIndex === labelIndex
+                                            ? event.target.value
+                                            : item.descriptions[levelIndex] || "",
+                                        ),
+                                      }
+                                    : item),
+                                })}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <p className="muted">Add criteria to show a matrix. Each row is rated separately, and the optional descriptions explain each performance level.</p>
                   </div>
                 )}
                 {type === "contribution" && (
@@ -1383,11 +1736,7 @@ function Assignments({
                 )}
                 {type === "points" && (
                   <div className="question-options">
-                    <label>
-                      Points per teammate
-                      <input type="number" min={1} max={100} value={q.settings?.points_per_peer ?? 10} onChange={(event) => updateQuestion(i, { settings: { points_per_peer: Number(event.target.value) } })} />
-                    </label>
-                    <p className="muted">Each student distributes this many points per eligible teammate, excluding themselves. The form calculates the required total and requires the points to add up exactly.</p>
+                    <p className="muted">Each student distributes exactly 100 points across every active team member, including themselves. The form requires the total to equal 100.</p>
                   </div>
                 )}
                 {type === "text" && (
@@ -1459,12 +1808,17 @@ function Roster({
 }) {
   const [students, setStudents] = useState<import("./api").Student[]>([]);
   const [name, setName] = useState("");
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [bulkText, setBulkText] = useState("");
+  const [bulkImportMessage, setBulkImportMessage] = useState("");
+  const [bulkCreated, setBulkCreated] = useState<import("./api").StudentCreated[]>([]);
+  const [bulkSkipped, setBulkSkipped] = useState<string[]>([]);
   const [existingUsername, setExistingUsername] = useState("");
   const [credential, setCredential] = useState("");
   const [copied, setCopied] = useState(false);
   const [editingStudent, setEditingStudent] = useState<import("./api").Student | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
   const load = useCallback(
     () =>
       run<any>(
@@ -1483,30 +1837,131 @@ function Roster({
         `/students?course_id=${encodeURIComponent(courseId)}`,
         {
         method: "POST",
-        body: JSON.stringify({ display_name: name, username }),
+        body: JSON.stringify({ display_name: name, email }),
         },
       ),
     );
     if (x !== undefined) {
       setName("");
-      setUsername("");
-      setCredential(x.one_time_credential);
+      setEmail("");
+      setCredential(x.one_time_credential || "");
       setCopied(false);
-      onSuccess("Student added. Share the one-time credential privately.");
+      setBulkCreated(x.email ? [x] : []);
+      onSuccess(
+        x.invitation_sent
+          ? "Student added. An invitation email was sent with a password setup link."
+          : x.email
+            ? "Student added, but the invitation email could not be sent. Check email settings and retry."
+            : "Student added. Share the one-time credential privately.",
+      );
       void load();
+    }
+  }
+  async function addBulk(e: FormEvent) {
+    e.preventDefault();
+    const submit = (skipExisting: boolean) =>
+      run(() => api<{
+          confirmation_required: boolean;
+          existing_usernames: string[];
+          skipped_usernames: string[];
+          re_enrolled_usernames: string[];
+          count: number;
+          students: import("./api").StudentCreated[];
+        }>(`/students/bulk?course_id=${encodeURIComponent(courseId)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          students: parseBulkStudents(bulkText),
+          skip_existing: skipExisting,
+        }),
+      }));
+    let result = await submit(false);
+    if (result?.confirmation_required) {
+      const existing = result.existing_usernames;
+      const names = existing.map((value) => `• ${value}`).join("\n");
+      if (!window.confirm(
+        `These usernames already exist:\n\n${names}\n\nSkip these accounts and add the remaining students?`,
+      ))
+        return;
+      result = await submit(true);
+    }
+    if (result !== undefined) {
+      setBulkText("");
+      setBulkCreated(result.students);
+      setBulkSkipped(result.skipped_usernames);
+      const reEnrolledCount = result.re_enrolled_usernames.length;
+      const failedInvitations = result.students.filter(
+        (student) => student.email && !student.invitation_sent,
+      ).length;
+      const invitedCount = result.students.filter((student) => student.email).length;
+      const invitationMessage = invitedCount
+        ? failedInvitations
+          ? ` ${failedInvitations} invitation email(s) could not be sent; check the email configuration.`
+          : " Invitation emails sent."
+        : "";
+      const messages = [];
+      if (result.count) {
+        messages.push(`${result.count} students added.${invitationMessage}`);
+      }
+      if (reEnrolledCount) {
+        messages.push(
+          `${reEnrolledCount} existing student${reEnrolledCount === 1 ? "" : "s"} re-enrolled in this course.`,
+        );
+      }
+      if (!result.count && !reEnrolledCount) {
+        messages.push("No new students were added; all accounts already exist.");
+      }
+      if (result.skipped_usernames.length) {
+        messages.push(`${result.skipped_usernames.length} existing account(s) skipped.`);
+      }
+      onSuccess(messages.join(" "));
+      void load();
+    }
+  }
+  async function importSpreadsheet(file: File | undefined) {
+    setBulkImportMessage("");
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setBulkImportMessage("Choose a spreadsheet that is 5 MB or smaller.");
+      return;
+    }
+    try {
+      let contents: string;
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        contents = await file.text();
+      } else if (file.name.toLowerCase().endsWith(".xlsx")) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const result = await api<{ csv_text: string }>(
+          `/students/import-spreadsheet?course_id=${encodeURIComponent(courseId)}`,
+          { method: "POST", body: formData },
+        );
+        contents = result.csv_text;
+      } else {
+        setBulkImportMessage("Choose an .xlsx or .csv spreadsheet.");
+        return;
+      }
+      const imported = parseBulkStudents(contents);
+      setBulkText(contents.replace(/^\uFEFF/, ""));
+      setBulkImportMessage(`${imported.length} students ready from ${file.name}.`);
+    } catch (error) {
+      setBulkImportMessage(messageOf(error));
     }
   }
   async function enrollExisting(e: FormEvent) {
     e.preventDefault();
     const result = await run(() =>
-      api(`/courses/${courseId}/students`, {
+      api<{ already_enrolled: boolean }>(`/courses/${courseId}/students`, {
         method: "POST",
         body: JSON.stringify({ username: existingUsername }),
       }),
     );
     if (result !== undefined) {
       setExistingUsername("");
-      onSuccess("Existing student enrolled in this course.");
+      onSuccess(
+        result.already_enrolled
+          ? "Student is already enrolled in this course."
+          : "Existing student enrolled in this course.",
+      );
       void load();
     }
   }
@@ -1518,7 +1973,7 @@ function Roster({
         `/students/${encodeURIComponent(String(editingStudent.id))}?course_id=${encodeURIComponent(courseId)}`,
         {
           method: "PUT",
-          body: JSON.stringify({ display_name: editDisplayName }),
+          body: JSON.stringify({ display_name: editDisplayName, email: editEmail }),
         },
       ),
     );
@@ -1526,6 +1981,22 @@ function Roster({
       setEditingStudent(null);
       onSuccess("Student updated.");
       void load();
+    }
+  }
+  async function retryInvitation(student: import("./api").StudentCreated) {
+    const result = await run(() =>
+      api<{ ok: true }>(
+        `/students/${encodeURIComponent(String(student.id))}/invitation?course_id=${encodeURIComponent(courseId)}`,
+        { method: "POST" },
+      ),
+    );
+    if (result !== undefined) {
+      setBulkCreated((current) =>
+        current.map((item) =>
+          item.id === student.id ? { ...item, invitation_sent: true } : item,
+        ),
+      );
+      onSuccess(`Invitation email sent to ${student.email}.`);
     }
   }
   async function removeStudent(student: import("./api").Student) {
@@ -1556,14 +2027,61 @@ function Roster({
             />
           </label>
           <label>
-            Username
+            Email address
             <input
               required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
             />
           </label>
           <Button>Add student</Button>
+        </form>
+      </section>
+      <section className="panel">
+        <h2>Add students in bulk</h2>
+        <p className="muted">
+          Paste one student per line as <code>email, display name</code>, or upload
+          a spreadsheet with email and name columns. Up to 500 students can be added.
+          Existing emails are checked before adding the
+          remaining students.
+        </p>
+        <form className="stack" onSubmit={addBulk}>
+          <label>
+            Upload a spreadsheet
+            <input
+              type="file"
+              accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(e) => {
+                void importSpreadsheet(e.target.files?.[0]);
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <p className="muted">
+            Use columns for email and display name. A header row is optional;
+            accepted headers include <code>email</code> and
+            {" "}<code>display name</code>, <code>name</code>, or first and last name
+            columns. Excel uploads read the first worksheet and are not stored by
+            the app.
+          </p>
+          {bulkImportMessage && <p className="muted" role="status">{bulkImportMessage}</p>}
+          <label>
+            Student emails and display names
+            <textarea
+              required
+              rows={7}
+              value={bulkText}
+              onChange={(e) => {
+                setBulkText(e.target.value);
+                setBulkImportMessage("");
+              }}
+              placeholder={"jane.smith@example.edu, Jane Smith\nlee@example.edu, Lee Chen"}
+            />
+          </label>
+          <div className="action-row">
+            <Button>Add students</Button>
+          </div>
         </form>
       </section>
       <section className="panel">
@@ -1577,10 +2095,90 @@ function Roster({
         </form>
       </section>
       {credential && <section className="credential-panel" aria-labelledby="credential-title"><div><h2 id="credential-title">One-time student credential</h2><p>Share this credential privately with the student. It is shown only once and is not stored by this page.</p><code>{credential}</code></div><div className="action-row"><Button onClick={() => { void navigator.clipboard.writeText(credential).then(() => setCopied(true)).catch(() => onSuccess("Select and copy the credential manually; clipboard access was unavailable.")); }}> {copied ? "Copied" : "Copy credential"}</Button><Button className="secondary" onClick={() => setCredential("")}>Dismiss</Button></div></section>}
+      {bulkCreated.length > 0 && (
+        <section className="credential-panel" aria-labelledby="bulk-credential-title">
+          <div>
+            <h2 id="bulk-credential-title">Student invitation status</h2>
+            <p>
+              Share these credentials privately. They are shown only now and will
+              not be available after you leave this page.
+            </p>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Email</th><th>Display name</th><th>Invitation / credential</th></tr>
+                </thead>
+                <tbody>
+                  {bulkCreated.map((student) => (
+                    <tr key={student.id}>
+                      <td>{student.email || student.username}</td>
+                      <td>{student.display_name}</td>
+                      <td>
+                        {student.invitation_sent
+                          ? "Invitation sent"
+                          : student.one_time_credential
+                            ? <code>{student.one_time_credential}</code>
+                            : "Invitation not sent"}
+                        {student.email && !student.invitation_sent && (
+                          <Button
+                            className="secondary"
+                            onClick={() => void retryInvitation(student)}
+                          >
+                            Retry email
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="action-row">
+            {bulkCreated.some((student) => student.one_time_credential) && <Button onClick={() => {
+              const eligible = bulkCreated.filter((student) => student.one_time_credential);
+              const credentials = [
+                "Username\tDisplay name\tOne-time credential",
+                ...eligible.map((student) =>
+                  `${student.username}\t${student.display_name}\t${student.one_time_credential}`,
+                ),
+              ].join("\n");
+              void navigator.clipboard.writeText(credentials).then(
+                () => onSuccess("Student credentials copied."),
+                () => onSuccess("Select and copy the credentials manually; clipboard access was unavailable."),
+              );
+            }}>Copy legacy credentials</Button>}
+            <Button className="secondary" onClick={() => setBulkCreated([])}>Dismiss</Button>
+          </div>
+        </section>
+      )}
+      {bulkSkipped.length > 0 && (
+        <section className="panel" aria-labelledby="skipped-students-title">
+          <div className="panel-heading">
+            <div>
+              <h2 id="skipped-students-title">Existing usernames skipped</h2>
+              <p className="muted">These accounts were not changed or re-enrolled.</p>
+            </div>
+            <Button className="secondary" onClick={() => setBulkSkipped([])}>Dismiss</Button>
+          </div>
+          <ul>
+            {bulkSkipped.map((value) => <li key={value}><code>{value}</code></li>)}
+          </ul>
+        </section>
+      )}
       {editingStudent && (
         <section className="panel">
           <h2>Edit student · ID {editingStudent.id}</h2>
           <form className="form-grid" onSubmit={saveStudent}>
+            <label>
+              Email address
+              <input
+                type="email"
+                required
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+              />
+            </label>
             <label>
               Display name
               <input
@@ -1607,7 +2205,7 @@ function Roster({
                 <tr>
                   <th>ID</th>
                   <th>Name</th>
-                  <th>Username</th>
+                  <th>Email</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1616,12 +2214,13 @@ function Roster({
                   <tr key={s.id}>
                     <td>{s.id}</td>
                     <td>{s.display_name}</td>
-                    <td>{s.username}</td>
+                    <td>{s.email || s.username}</td>
                     <td>
                       <div className="action-row">
                         <Button className="secondary" onClick={() => {
                           setEditingStudent(s);
                           setEditDisplayName(s.display_name);
+                          setEditEmail(s.email || s.username);
                         }}>Edit</Button>
                         <Button className="secondary" onClick={() => void removeStudent(s)}>Remove</Button>
                       </div>
@@ -2269,6 +2868,89 @@ function MyReviews({
     </section>
   );
 }
+function StudentFeedbackView({
+  run,
+  courseId,
+}: {
+  run: Action;
+  courseId: string;
+}) {
+  const [items, setItems] = useState<StudentFeedback[]>([]);
+  const load = useCallback(
+    () =>
+      run<{ items?: StudentFeedback[] }>(
+        () => api(`/my/feedback?course_id=${encodeURIComponent(courseId)}`),
+        (response) => setItems(list(response)),
+      ),
+    [courseId, run],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return (
+    <section className="panel">
+      <h2>Feedback shared with you</h2>
+      <p className="muted">
+        Responses appear here only when the lecturer has allowed the recipient or team to view them.
+      </p>
+      {items.length ? (
+        <div className="question-list">
+          {items.map((item, index) => {
+            const question: Question = {
+              id: item.question_id,
+              prompt: item.prompt,
+              order: index + 1,
+              type: item.type,
+              settings: item.settings,
+            };
+            return (
+              <article className="question-card" key={`${item.question_id}-${item.submitted_at}-${index}`}>
+                <div className="panel-heading">
+                  <h3>{item.assignment_title}</h3>
+                  <span className="status-pill">{item.respondent}</span>
+                </div>
+                {item.submission_title && <p className="muted">About: {item.submission_title}</p>}
+                <b>{item.prompt}</b>
+                {item.details && (
+                  <details className="question-details">
+                    <summary>More details</summary>
+                    <p>{item.details}</p>
+                  </details>
+                )}
+                {item.type === "rubric" && item.settings?.criteria?.length ? (
+                  <RubricMatrix
+                    question={question}
+                    value={item.value}
+                    disabled
+                    onChange={() => undefined}
+                  />
+                ) : item.type === "rubric" && typeof item.value === "number" ? (
+                  <p>
+                    {item.value} / {(item.settings?.labels || DEFAULT_RUBRIC_LABELS).length}
+                    {" · "}{(item.settings?.labels || DEFAULT_RUBRIC_LABELS)[item.value - 1]}
+                  </p>
+                ) : item.type === "text" ? (
+                  <p className="feedback-response">{String(item.value)}</p>
+                ) : item.type === "contribution" ? (
+                  <p>{String(item.value)} / 100 equal-share index</p>
+                ) : (
+                  <p>{JSON.stringify(item.value)}</p>
+                )}
+                <small className="muted">
+                  {visibilityDescription(item.visibility)} · {new Date(item.submitted_at).toLocaleString()}
+                </small>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty>
+          No responses have been shared with you yet. Instructors may choose to keep feedback confidential.
+        </Empty>
+      )}
+    </section>
+  );
+}
 function AssignmentForms({
   run,
   courseId,
@@ -2297,7 +2979,9 @@ function AssignmentForms({
                 next[key] = form.value ?? (
                   form.type === "points"
                     ? Object.fromEntries(form.eligible_peers.map((peer) => [peer.id, 0]))
-                    : ""
+                    : form.type === "rubric" && form.settings?.criteria?.length
+                      ? {}
+                      : ""
                 );
               }
             }
@@ -2319,10 +3003,14 @@ function AssignmentForms({
         setValidation((current) => ({ ...current, [key]: `Allocate exactly ${form.points_pool} points before submitting.` }));
         return;
       }
-    } else if (typeof value === "string" && !value.trim()) {
-      setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
-      return;
-    } else if (value === undefined || value === null || value === "") {
+    } else if (!hasQuestionResponse({
+      id: form.id,
+      prompt: form.prompt,
+      order: 1,
+      type: form.type,
+      recipient: form.recipient,
+      settings: form.settings,
+    }, value)) {
       setValidation((current) => ({ ...current, [key]: "Enter a response before submitting." }));
       return;
     }
@@ -2372,6 +3060,15 @@ function AssignmentForms({
                             : "Self reflection"}
                   </span>
                 </div>
+                {form.settings?.details && (
+                  <details className="question-details">
+                    <summary>More details</summary>
+                    <p>{form.settings.details}</p>
+                  </details>
+                )}
+                {form.settings?.visibility && (
+                  <Notice>{visibilityDescription(form.settings.visibility)}</Notice>
+                )}
                 {!form.available && (
                   <Notice>
                     {form.recipient === "team"
@@ -2382,7 +3079,7 @@ function AssignmentForms({
                 {form.type === "points" && form.available && (
                   <>
                     <p className="muted">
-                      Allocate exactly {form.points_pool} points total ({form.settings?.points_per_peer} per teammate). You cannot allocate points to yourself.
+                      Allocate exactly {form.points_pool} points among all {form.scope === "team" ? "team members" : "eligible classmates"}, including yourself.
                     </p>
                     {form.eligible_peers.map((peer) => {
                       const distribution = recordValue(value);
@@ -2412,21 +3109,28 @@ function AssignmentForms({
                   </>
                 )}
                 {form.type === "rubric" && (
-                  <div className="likert">
-                    {(form.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
-                      <label key={label}>
-                        <input
-                          type="radio"
-                          name={`form-${key}`}
-                          disabled={disabled}
-                          checked={value === index + 1}
-                          onChange={() => setValues((current) => ({ ...current, [key]: index + 1 }))}
-                        />
-                        <span>{index + 1}</span>
-                        <small>{label}</small>
-                      </label>
-                    ))}
-                  </div>
+                  form.settings?.criteria?.length
+                    ? <RubricMatrix
+                        question={form}
+                        value={value}
+                        disabled={disabled}
+                        onChange={(next) => setValues((current) => ({ ...current, [key]: next }))}
+                      />
+                    : <div className="likert">
+                        {(form.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                          <label key={label}>
+                            <input
+                              type="radio"
+                              name={`form-${key}`}
+                              disabled={disabled}
+                              checked={value === index + 1}
+                              onChange={() => setValues((current) => ({ ...current, [key]: index + 1 }))}
+                            />
+                            <span>{index + 1}</span>
+                            <small>{label}</small>
+                          </label>
+                        ))}
+                      </div>
                 )}
                 {form.type === "contribution" && (
                   <label>
@@ -2483,12 +3187,14 @@ function ReviewEditor({
   const [feedback, setFeedback] = useState("");
   const [validation, setValidation] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [submittedQuestions, setSubmittedQuestions] = useState<string[]>([]);
   useEffect(() => {
     void run<Review>(
       () => api(`/reviews/${review.id}`),
       (r) => {
         setDetail(r);
         setFeedback(r.feedback || "");
+        setSubmittedQuestions((r.submitted_question_ids || []).map(String));
         const saved: Record<string, unknown> = {};
         if (r.responses?.length) {
           r.responses.forEach((answer) => {
@@ -2531,11 +3237,9 @@ function ReviewEditor({
       return [{ question_id: question.id!, value }];
     });
     if (submit) {
-      const missing = questionsToRate.filter((question) => {
-        const value = answers[String(question.id)];
-        return value === undefined || value === null || value === "" ||
-          (typeof value === "string" && !value.trim());
-      });
+      const missing = questionsToRate.filter(
+        (question) => !hasQuestionResponse(question, answers[String(question.id)]),
+      );
       if (missing.length) {
         setValidation(`Answer each required peer question before submitting (${missing.length} remaining).`);
         return;
@@ -2564,6 +3268,38 @@ function ReviewEditor({
         onBack();
       }
     } else if (saved !== undefined) onSuccess("Draft saved.");
+  }
+  async function saveAnswer(question: Question) {
+    if (
+      submitted ||
+      question.id === undefined ||
+      submittedQuestions.includes(String(question.id))
+    ) return;
+    const value = answers[String(question.id)];
+    if (!hasQuestionResponse(question, value)) {
+      setValidation("Complete this question before saving its answer.");
+      return;
+    }
+    setValidation("");
+    const saved = await run(() =>
+      api(`/reviews/${review.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          answers: [{ question_id: question.id, value }],
+          feedback,
+        }),
+      }),
+    );
+    if (saved === undefined) return;
+    const result = await run(() =>
+      api(`/reviews/${review.id}/answers/${question.id}/submit`, { method: "POST" }),
+    );
+    if (result !== undefined) {
+      setSubmittedQuestions((current) =>
+        current.includes(String(question.id)) ? current : [...current, String(question.id)],
+      );
+      onSuccess("This answer has been submitted. Continue with the remaining questions.");
+    }
   }
   async function flagForInstructor() {
     const reason = window.prompt("What should the instructor review?")?.trim();
@@ -2613,38 +3349,63 @@ function ReviewEditor({
       ) : questionsToRate.map((question) => {
         const type = question.type || "rubric";
         const value = answers[String(question.id)];
+        const questionSubmitted = submittedQuestions.includes(String(question.id));
         return (
           <div className="criterion" key={String(question.id)}>
             <b>{question.prompt}</b>
+            {question.settings?.details && (
+              <details className="question-details">
+                <summary>More details</summary>
+                <p>{question.settings.details}</p>
+              </details>
+            )}
+            {question.settings?.visibility && (
+              <Notice>{visibilityDescription(question.settings.visibility)}</Notice>
+            )}
             {type === "rubric" && (
-              <div className="likert">
-                {(question.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
-                  <label key={label}>
-                    <input
-                      type="radio"
-                      name={`q-${question.id}`}
-                      disabled={submitted}
-                      checked={value === index + 1}
-                      onChange={() => setAnswers((current) => ({ ...current, [String(question.id)]: index + 1 }))}
-                    />
-                    <span>{index + 1}</span>
-                    <small>{label}</small>
-                  </label>
-                ))}
-              </div>
+              question.settings?.criteria?.length
+                ? <RubricMatrix
+                    question={question}
+                    value={value}
+                    disabled={submitted || submittedQuestions.includes(String(question.id))}
+                    onChange={(next) => setAnswers((current) => ({ ...current, [String(question.id)]: next }))}
+                  />
+                : <div className="likert">
+                    {(question.settings?.labels || DEFAULT_RUBRIC_LABELS).map((label, index) => (
+                      <label key={label}>
+                        <input
+                          type="radio"
+                          name={`q-${question.id}`}
+                          disabled={submitted || questionSubmitted}
+                          checked={value === index + 1}
+                          onChange={() => setAnswers((current) => ({ ...current, [String(question.id)]: index + 1 }))}
+                        />
+                        <span>{index + 1}</span>
+                        <small>{label}</small>
+                      </label>
+                    ))}
+                  </div>
             )}
             {type === "contribution" && (
               <label>
                 Contribution index (100 = equal share; 0–200)
-                <input type="number" min={0} max={200} step={1} disabled={submitted} value={value === undefined ? "" : String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value === "" ? "" : Number(event.target.value) }))} />
+                <input type="number" min={0} max={200} step={1} disabled={submitted || questionSubmitted} value={value === undefined ? "" : String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value === "" ? "" : Number(event.target.value) }))} />
               </label>
             )}
             {type === "text" && (
               <label>
                 Written response
-                <textarea rows={4} maxLength={4000} disabled={submitted} value={typeof value === "string" ? value : ""} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value }))} />
+                <textarea rows={4} maxLength={4000} disabled={submitted || questionSubmitted} value={typeof value === "string" ? value : ""} onChange={(event) => setAnswers((current) => ({ ...current, [String(question.id)]: event.target.value }))} />
               </label>
             )}
+            <Button
+              className="secondary"
+              type="button"
+              disabled={submitted || questionSubmitted}
+              onClick={() => void saveAnswer(question)}
+            >
+              {questionSubmitted ? "Answer submitted" : "Submit this answer"}
+            </Button>
           </div>
         );
       })}
@@ -2678,7 +3439,7 @@ function ReviewEditor({
           disabled={submitted || !questionsToRate.length}
           onClick={() => void save(true)}
         >
-          Submit review
+          Submit all answers
         </Button>
       </div>
     </section>
