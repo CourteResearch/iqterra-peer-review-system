@@ -1,0 +1,43 @@
+%% IQTerra Peer-Review Platform — High-Level Architecture
+flowchart TB
+  subgraph External[External Learning Environment]
+    Moodle[Moodle LMS\nCourses · enrolment · submissions · gradebook]
+    Moodle --> LTI
+  end
+
+  subgraph App[IQTerra Peer-Review Application ]
+    Browser[Browser]
+    Frontend[React + TypeScript + Vite\nCourse dashboard · assignment editor · student review UI]
+    API[FastAPI application\nAuthentication · role checks · course APIs · review APIs]
+    Rules[Domain services\nAllocation engine · question logic · moderation workflow]
+    Export[Backup and export service]
+  end
+
+  subgraph Storage[Local Data Boundary]
+    SQLite[(SQLite\ndata/iqterra.sqlite3)]
+    Uploads[(Local uploads\ndata/uploads/)]
+    Audit[(Review audit +\nmoderation history)]
+  end
+
+  Browser --> Frontend
+  Frontend -->|JSON / REST| API
+  API --> Rules
+  API --> SQLite
+  API --> Uploads
+  Rules --> SQLite
+  Rules --> Audit
+  Export --> SQLite
+  Export --> Uploads
+
+  LTI -..-> API
+  API -. future approved grades .-> LTI
+
+  Health[/GET /health/]
+  API --> Health
+
+  classDef external fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:5 5,color:#111827;
+  classDef app fill:#eff6ff,stroke:#2563eb,stroke-width:1.5px,color:#172554;
+  classDef store fill:#ecfdf5,stroke:#059669,stroke-width:1.5px,color:#064e3b;
+  class Moodle,LTI external;
+  class Browser,Frontend,API,Rules,Export,Health app;
+  class SQLite,Uploads,Audit store;
